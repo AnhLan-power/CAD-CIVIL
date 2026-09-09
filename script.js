@@ -2944,7 +2944,7 @@
             return { path: extractEGProfile(alignmentEntity, interval), source: 'EG (mặt đất tự nhiên từ Surface)' };
         }
 
-        function createCorridorEntity(alignmentEntity, assembly, interval, taluyRatio) {
+        function createCorridorEntity(alignmentEntity, assembly, interval, taluyRatio, excludeStationRanges) {
             const info = alignmentEntity.object.userData.alignmentInfo;
             const piPoints = alignmentEntity.object.userData.boundaryPts;
             const { path } = buildAlignmentPath(piPoints, info.radius);
@@ -2962,6 +2962,13 @@
             // Dùng LẠI đúng hàm tính mặt cắt của Trắc ngang cho từng cọc dọc Corridor, để có luôn cả
             // taluy 2 bên (daylight) chứ không dừng đột ngột ở mép mặt đường như phiên bản trước.
             const sectionDataList = stations.map(st => computeSectionAtStation(st, assembly, baseline, halfWidthForCorridor, ratio));
+
+            // Các cọc rơi vào phạm vi 1 Intersection (nếu có) — dùng để "cắt" Corridor dừng lại đúng
+            // tại biên vùng giao, thay vì chạy xuyên qua Intersection (xem excludeStationRanges, được
+            // tự tính khi tạo Intersection và lưu lại trong corridorInfo để rebuild vẫn giữ đúng chỗ cắt).
+            const ranges = excludeStationRanges || [];
+            const stationInGap = stations.map(st => ranges.some(r => st.station >= r[0] && st.station <= r[1]));
+            const skipConnection = i => stationInGap[i] || stationInGap[i + 1];
 
             const group = new THREE.Group();
             group.userData.isCorridor = true;
@@ -2985,10 +2992,13 @@
                 const perp = new THREE.Vector3(-st.dir.y, st.dir.x, 0);
                 return new THREE.Vector3(st.pos.x + perp.x * offset, st.pos.y + perp.y * offset, elevationToDisplayZ(realElev));
             }
-            function buildStripGeometry(rows, colorFn) {
+            // colorFn có thể là hàm 2 tham số (a,b) như pickSegmentColor, hoặc hàm 0 tham số trả màu cố
+            // định — skip là hàm(i) trả true nếu KHÔNG nối cọc i với cọc i+1 (dùng để cắt tại Intersection).
+            function buildStripGeometry(rows, colorFn, skip) {
                 const positions = [], colors = [];
                 const nCols = rows[0].length;
                 for (let i = 0; i < rows.length - 1; i++) {
+                    if (skip && skip(i)) continue; // bỏ nối 2 cọc này (VD: rơi vào vùng giao Intersection)
                     for (let j = 0; j < nCols - 1; j++) {
                         const p1 = rows[i][j].pos, p2 = rows[i][j + 1].pos;
                         const p3 = rows[i + 1][j + 1].pos, p4 = rows[i + 1][j].pos;
@@ -3036,7 +3046,7 @@
                     color: pt.color
                 }))
             );
-            const topGeo = buildStripGeometry(topRows, pickSegmentColor);
+            const topGeo = buildStripGeometry(topRows, pickSegmentColor, skipConnection);
             const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
             topMesh.userData.isCorridorMesh = true;
             group.add(topMesh);
@@ -3076,7 +3086,7 @@
                     if (layerTopRows[0].length < 2) return; // phạm vi quá hẹp, không đủ điểm để dựng
 
                     // Mặt đáy của lớp (đường phân cách với lớp bên dưới)
-                    const botGeo = buildStripGeometry(layerBotRows, () => color);
+                    const botGeo = buildStripGeometry(layerBotRows, () => color, skipConnection);
                     const botMesh = new THREE.Mesh(botGeo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
                     botMesh.userData.isCorridorMesh = true;
                     group.add(botMesh);
@@ -3088,7 +3098,7 @@
                         for (let i = 0; i < layerTopRows.length; i++) {
                             edgeRows.push([{ pos: layerTopRows[i][j].pos }, { pos: layerBotRows[i][j].pos }]);
                         }
-                        const edgeGeo = buildStripGeometry(edgeRows, () => color);
+                        const edgeGeo = buildStripGeometry(edgeRows, () => color, skipConnection);
                         const edgeMesh = new THREE.Mesh(edgeGeo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
                         edgeMesh.userData.isCorridorMesh = true;
                         group.add(edgeMesh);
@@ -3118,7 +3128,7 @@
                 const nColsFirst = layerTopRows[0].length;
                 if (layerTopRows.some(r => r.length !== nColsFirst)) return; // số cột lệch nhau giữa các cọc (do chân taluy dịch chuyển theo địa hình) -> bỏ qua để tránh méo hình, thay vì vẽ sai
 
-                const botGeo = buildStripGeometry(layerBotRows, () => color);
+                const botGeo = buildStripGeometry(layerBotRows, () => color, skipConnection);
                 const botMesh = new THREE.Mesh(botGeo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
                 botMesh.userData.isCorridorMesh = true;
                 group.add(botMesh);
@@ -3130,7 +3140,7 @@
                         edgeRows.push([{ pos: layerTopRows[i][j].pos }, { pos: layerBotRows[i][j].pos }]);
                     }
                     if (edgeRows.length < 2) return;
-                    const edgeGeo = buildStripGeometry(edgeRows, () => color);
+                    const edgeGeo = buildStripGeometry(edgeRows, () => color, skipConnection);
                     const edgeMesh = new THREE.Mesh(edgeGeo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
                     edgeMesh.userData.isCorridorMesh = true;
                     group.add(edgeMesh);
@@ -3155,7 +3165,7 @@
                 new THREE.Vector3(minX, minY, 0), new THREE.Vector3(maxX, minY, 0),
                 new THREE.Vector3(maxX, maxY, 0), new THREE.Vector3(minX, maxY, 0)
             ];
-            group.userData.corridorInfo = { alignmentName: info.name, totalLength: info.totalLength, stationCount: stations.length, baselineSource: source, interval, taluyRatio: ratio };
+            group.userData.corridorInfo = { alignmentName: info.name, totalLength: info.totalLength, stationCount: stations.length, baselineSource: source, interval, taluyRatio: ratio, excludeStationRanges: ranges };
             return { group };
         }
 
@@ -3171,7 +3181,7 @@
                 setCommandText(`Command: Không tìm thấy Alignment "${info.alignmentName}" (có thể đã bị xoá).`);
                 return;
             }
-            const result = createCorridorEntity(alignmentEntity, currentAssembly, info.interval || 10, info.taluyRatio || defaultTaluyRatio);
+            const result = createCorridorEntity(alignmentEntity, currentAssembly, info.interval || 10, info.taluyRatio || defaultTaluyRatio, info.excludeStationRanges || []);
             if (result.error) { setCommandText('Command: ' + result.error); return; }
 
             while (entity.object.children.length) entity.object.remove(entity.object.children[0]);
@@ -3861,7 +3871,7 @@
                 const a = startAngle + delta * (i / segs);
                 arcPts.push(new THREE.Vector3(center.x + radius * Math.cos(a), center.y + radius * Math.sin(a), 0));
             }
-            return { corner, center, tangentPt1, tangentPt2, arcPts };
+            return { corner, center, tangentPt1, tangentPt2, arcPts, tangentDist };
         }
 
         // Bề rộng mép đường (tính từ tim) dùng để bo góc — ưu tiên mép ngoài Bó vỉa, không có thì lấy
@@ -3880,13 +3890,17 @@
             const w = getRoadEdgeWidth(currentAssembly);
             const getPerp = d => new THREE.Vector3(-d.y, d.x, 0);
             const rays = [
-                { dir: crossing.dirA, width: w },
-                { dir: crossing.dirA.clone().negate(), width: w },
-                { dir: crossing.dirB, width: w },
-                { dir: crossing.dirB.clone().negate(), width: w }
+                { key: 'A+', dir: crossing.dirA, width: w },
+                { key: 'A-', dir: crossing.dirA.clone().negate(), width: w },
+                { key: 'B+', dir: crossing.dirB, width: w },
+                { key: 'B-', dir: crossing.dirB.clone().negate(), width: w }
             ].sort((a, b) => Math.atan2(a.dir.y, a.dir.x) - Math.atan2(b.dir.y, b.dir.x));
 
             const fillets = [];
+            // Khoảng cách tiếp tuyến (tangentDist) lớn nhất theo từng hướng — dùng để biết Corridor
+            // cần "cắt" (bỏ dựng hình) từ điểm giao ra xa bao nhiêu mét mỗi phía, sao cho vùng cắt đủ
+            // rộng để chứa TRỌN cả 2 cung bo góc liền kề hướng đó (mỗi hướng có thể chạm 2 cung khác nhau).
+            const maxTangentByKey = { 'A+': 0, 'A-': 0, 'B+': 0, 'B-': 0 };
             for (let i = 0; i < 4; i++) {
                 const r1 = rays[i], r2 = rays[(i + 1) % 4];
                 const offsetVec1 = getPerp(r1.dir).multiplyScalar(r1.width);
@@ -3894,6 +3908,8 @@
                 const fillet = computeQuadrantFillet(crossing.point, r1.dir, offsetVec1, r2.dir, offsetVec2, cornerRadius);
                 if (!fillet) return { error: 'Không bo góc được — 2 tuyến gần như song song/thẳng hàng tại điểm giao, hoặc bán kính bo góc quá lớn so với bề rộng đường.' };
                 fillets.push(fillet);
+                maxTangentByKey[r1.key] = Math.max(maxTangentByKey[r1.key], fillet.tangentDist);
+                maxTangentByKey[r2.key] = Math.max(maxTangentByKey[r2.key], fillet.tangentDist);
             }
 
             // Cao độ "làm phẳng" cả vùng giao — lấy theo tuyến ƯU TIÊN (tuyến click đầu tiên: alignA)
@@ -3902,6 +3918,12 @@
             const { path: baselineA, source } = findBaselineProfileForAlignment(alignA, 5);
             const realElevAtCrossing = interpolateAlongProfilePath(baselineA, crossing.stationA);
             const dispElev = elevationToDisplayZ(realElevAtCrossing !== null ? realElevAtCrossing : 0);
+
+            // Phạm vi lý trình cần "cắt" trên mỗi tuyến — cộng thêm 1 chút dư (0.3m) để mép Corridor
+            // nằm gọn KHUẤT dưới mảng Intersection, không hở khe do sai số làm tròn.
+            const marginExtra = 0.3;
+            const excludeRangeA = [crossing.stationA - maxTangentByKey['A-'] - marginExtra, crossing.stationA + maxTangentByKey['A+'] + marginExtra];
+            const excludeRangeB = [crossing.stationB - maxTangentByKey['B-'] - marginExtra, crossing.stationB + maxTangentByKey['B+'] + marginExtra];
 
             const group = new THREE.Group();
             group.userData.isIntersection = true;
@@ -3937,6 +3959,25 @@
                 cornerRadius, roadEdgeWidth: w,
                 flattenElevSource: source
             };
+
+            // Tự tìm Corridor ĐÃ CÓ SẴN của 2 tuyến này (nếu có) và rebuild lại với vùng cắt vừa tính,
+            // để Corridor dừng lại đúng tại biên vùng giao thay vì chạy xuyên qua — đây là chỗ khiến
+            // Intersection trước đây trông "rời rạc", không liền mạch với Corridor.
+            [{ entityRef: alignA, range: excludeRangeA }, { entityRef: alignB, range: excludeRangeB }].forEach(({ entityRef, range }) => {
+                const name = entityRef.object.userData.alignmentInfo.name;
+                entities.forEach(e => {
+                    if (e.type !== 'CORRIDOR' || e.object.userData.corridorInfo.alignmentName !== name) return;
+                    const existingRanges = (e.object.userData.corridorInfo.excludeStationRanges || []).slice();
+                    existingRanges.push(range);
+                    const rebuilt = createCorridorEntity(entityRef, currentAssembly, e.object.userData.corridorInfo.interval || 10, e.object.userData.corridorInfo.taluyRatio || defaultTaluyRatio, existingRanges);
+                    if (rebuilt.error) return;
+                    while (e.object.children.length) e.object.remove(e.object.children[0]);
+                    rebuilt.group.children.slice().forEach(child => e.object.add(child));
+                    e.object.userData.boundaryPts = rebuilt.group.userData.boundaryPts;
+                    e.object.userData.corridorInfo = rebuilt.group.userData.corridorInfo;
+                });
+            });
+
             return { group };
         }
 
