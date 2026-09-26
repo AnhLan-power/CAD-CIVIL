@@ -59,14 +59,47 @@
 
         // Bo góc 1 trong 4 "quadrant" tạo bởi 2 tia hướng ra khỏi điểm giao (d1, d2), với vector lệch
         // mép đường (offsetVec1, offsetVec2) đã tính sẵn dấu đúng bên trong quadrant.
-        function computeQuadrantFillet(P, d1, offsetVec1, d2, offsetVec2, radius) {
+        // maxTangentDist: giới hạn khoảng chạy đà tối đa — với góc giao quá xiên (gần thẳng hàng),
+        // công thức bo góc chuẩn (tangentDist = radius/tan(angle/2)) có thể đòi hỏi chạy đà dài bất
+        // thường (hàng chục mét) để giữ đúng bán kính yêu cầu, khiến cung bo văng ra rất xa điểm giao
+        // và trông như "gãy khúc"/hở ra so với phần còn lại. Khi vượt giới hạn, TỰ ĐỘNG giảm bán kính
+        // hiệu dụng cho riêng góc đó (vẫn bo tròn, chỉ nhỏ hơn yêu cầu) để chạy đà không vượt quá mức.
+        function computeQuadrantFillet(P, d1, offsetVec1, d2, offsetVec2, radius, maxTangentDist) {
             const A1 = P.clone().add(offsetVec1), A2 = P.clone().add(offsetVec2);
             const corner = lineLineIntersection(A1, d1, A2, d2);
             if (!corner) return null;
             const angle = Math.acos(THREE.MathUtils.clamp(d1.dot(d2), -1, 1));
             if (angle < 1e-3 || angle > Math.PI - 1e-3) return null; // gần song song/thẳng hàng -> bỏ qua
-            const tangentDist = radius / Math.tan(angle / 2);
-            const centerDist = radius / Math.sin(angle / 2);
+
+            // QUAN TRỌNG: với góc giao quá XIÊN (rất nhọn), chính ĐIỂM GÓC (nơi 2 đường mép kéo dài
+            // gặp nhau) đã nằm rất xa điểm giao P — đây là hệ quả hình học tất yếu (2 đường gần song
+            // song thì kéo dài ra rất lâu mới cắt nhau), KHÔNG PHỤ THUỘC bán kính bo. Giảm bán kính bo
+            // không giải quyết được vấn đề này (chỉ giảm được tangentDist TỪ điểm góc, không kéo điểm
+            // góc lại gần). Nên khi điểm góc đã quá xa P, phải bỏ cách bo tiếp tuyến "đúng nghĩa" và
+            // chuyển sang VÁT GÓC đơn giản (nối thẳng 2 điểm gần P trên 2 mép đường) cho hình không bị
+            // "văng" ra xa — đây chính là nguyên nhân gây hiện tượng "khe hở/ăn sâu vào đường" khi giao
+            // ở góc xiên.
+            const cornerDistFromP = corner.distanceTo(P);
+            const uncappedTangentDist = radius / Math.tan(angle / 2);
+            // Kiểm tra TỔNG khoảng cách từ P (qua điểm góc rồi chạy đà ra tới điểm tiếp tuyến) — không
+            // chỉ riêng điểm góc, vì có trường hợp điểm góc không quá xa nhưng CỘNG THÊM chạy đà thì
+            // tổng lại vượt xa mức hợp lý (đúng trường hợp gây lỗi ở góc giao ~40°).
+            if (maxTangentDist && cornerDistFromP + uncappedTangentDist > maxTangentDist) {
+                const chamferDist = Math.min(radius * 2, maxTangentDist * 0.6);
+                const pt1 = A1.clone().add(d1.clone().multiplyScalar(chamferDist));
+                const pt2 = A2.clone().add(d2.clone().multiplyScalar(chamferDist));
+                return { corner: null, center: null, tangentPt1: pt1, tangentPt2: pt2, arcPts: [pt1, pt2], tangentDist: chamferDist, effectiveRadius: 0, clamped: true, isChamfer: true };
+            }
+
+            let effectiveRadius = radius;
+            let tangentDist = uncappedTangentDist;
+            let clamped = false;
+            if (maxTangentDist && tangentDist > maxTangentDist) {
+                tangentDist = maxTangentDist;
+                effectiveRadius = tangentDist * Math.tan(angle / 2);
+                clamped = true;
+            }
+            const centerDist = effectiveRadius / Math.sin(angle / 2);
             const bisector = d1.clone().add(d2).normalize();
             const center = corner.clone().add(bisector.clone().multiplyScalar(centerDist));
             const tangentPt1 = corner.clone().add(d1.clone().multiplyScalar(tangentDist));
@@ -80,9 +113,9 @@
             const arcPts = [];
             for (let i = 0; i <= segs; i++) {
                 const a = startAngle + delta * (i / segs);
-                arcPts.push(new THREE.Vector3(center.x + radius * Math.cos(a), center.y + radius * Math.sin(a), 0));
+                arcPts.push(new THREE.Vector3(center.x + effectiveRadius * Math.cos(a), center.y + effectiveRadius * Math.sin(a), 0));
             }
-            return { corner, center, tangentPt1, tangentPt2, arcPts, tangentDist };
+            return { corner, center, tangentPt1, tangentPt2, arcPts, tangentDist, effectiveRadius, clamped };
         }
 
         // Bề rộng mép đường (tính từ tim) dùng để bo góc — lấy đúng bằng bề rộng NGOÀI CÙNG của
@@ -128,6 +161,16 @@
             return group;
         }
 
+        // Bề rộng mép LÒNG ĐƯỜNG XE CHẠY (trong Bó vỉa, chưa tính Vỉa hè) — dùng làm biên TRONG của
+        // vùng giao, để tách riêng phần "lòng đường" (giữa) khỏi phần "vỉa hè bao quanh góc bo" (viền
+        // ngoài) — nếu không, cả mảng giao chỉ có 1 màu duy nhất, không thấy vỉa hè đâu.
+        function getInnerRoadWidth(assembly) {
+            const ranges = computeAssemblyTypeRanges(assembly);
+            if (ranges.curb) return ranges.curb.innerAbs;
+            if (ranges.lane) return ranges.lane.outerAbs;
+            return 3.5;
+        }
+
         function createIntersectionEntity(alignA, alignB, cornerRadius) {
             const crossing = findAlignmentsCrossing(alignA, alignB);
             if (!crossing) return { error: 'Alignment không cắt nhau trong bản vẽ hiện tại.' };
@@ -146,16 +189,38 @@
             // cần "cắt" (bỏ dựng hình) từ điểm giao ra xa bao nhiêu mét mỗi phía, sao cho vùng cắt đủ
             // rộng để chứa TRỌN cả 2 cung bo góc liền kề hướng đó (mỗi hướng có thể chạm 2 cung khác nhau).
             const maxTangentByKey = { 'A+': 0, 'A-': 0, 'B+': 0, 'B-': 0 };
+            // Giới hạn khoảng chạy đà tối đa cho mỗi góc bo — tránh góc giao quá xiên khiến cung bo bị
+            // "văng" ra rất xa điểm giao (xem giải thích trong computeQuadrantFillet). Giới hạn theo
+            // bán kính yêu cầu (rộng rãi gấp 3 lần) nhưng không quá 1 mức tối đa hợp lý.
+            const maxTangentDist = Math.min(cornerRadius * 3 + w * 2, 25);
+            let anyClamped = false;
             for (let i = 0; i < 4; i++) {
                 const r1 = rays[i], r2 = rays[(i + 1) % 4];
                 const offsetVec1 = getPerp(r1.dir).multiplyScalar(r1.width);
                 const offsetVec2 = getPerp(r2.dir).multiplyScalar(-r2.width);
-                const fillet = computeQuadrantFillet(crossing.point, r1.dir, offsetVec1, r2.dir, offsetVec2, cornerRadius);
+                const fillet = computeQuadrantFillet(crossing.point, r1.dir, offsetVec1, r2.dir, offsetVec2, cornerRadius, maxTangentDist);
                 if (!fillet) return { error: 'Không bo góc được — 2 tuyến gần như song song/thẳng hàng tại điểm giao, hoặc bán kính bo góc quá lớn so với bề rộng đường.' };
+                if (fillet.clamped) anyClamped = true;
                 fillets.push(fillet);
                 maxTangentByKey[r1.key] = Math.max(maxTangentByKey[r1.key], fillet.tangentDist);
                 maxTangentByKey[r2.key] = Math.max(maxTangentByKey[r2.key], fillet.tangentDist);
             }
+
+            // Bo góc lần 2 theo mép TRONG (lòng đường xe chạy, trong Bó vỉa) — dùng bán kính bo NHỎ
+            // HƠN theo đúng tỉ lệ (bo góc lòng đường luôn nhỏ hơn bo góc mép ngoài cùng 1 khoảng =
+            // hiệu 2 bề rộng), để tạo biên trong cho vùng "lòng đường", phần còn lại (giữa biên trong
+            // và biên ngoài) chính là dải Vỉa hè bao quanh góc bo.
+            const wInner = getInnerRoadWidth(currentAssembly);
+            const innerRadius = Math.max(cornerRadius - (w - wInner), 0.5);
+            const innerFillets = [];
+            for (let i = 0; i < 4; i++) {
+                const r1 = rays[i], r2 = rays[(i + 1) % 4];
+                const offsetVec1 = getPerp(r1.dir).multiplyScalar(wInner);
+                const offsetVec2 = getPerp(r2.dir).multiplyScalar(-wInner);
+                const fillet = computeQuadrantFillet(crossing.point, r1.dir, offsetVec1, r2.dir, offsetVec2, innerRadius, maxTangentDist);
+                if (fillet) innerFillets.push(fillet);
+            }
+            const hasInnerRing = innerFillets.length === 4 && wInner < w - 1e-3;
 
             // Cao độ "làm phẳng" cả vùng giao — lấy theo tuyến ƯU TIÊN (tuyến click đầu tiên: alignA)
             const { path: pathA } = buildAlignmentPath(alignA.object.userData.boundaryPts, alignA.object.userData.alignmentInfo.radius);
@@ -173,14 +238,38 @@
             const group = new THREE.Group();
             group.userData.isIntersection = true;
 
-            // Đường biên vùng giao = nối liên tiếp 4 cung bo góc (giữa 2 cung liền kề tự động là đoạn
-            // thẳng — phần mép đường thẳng chưa bị bo, không cần vẽ riêng)
+            // Đường biên vùng giao (mép ngoài) = nối liên tiếp 4 cung bo góc (giữa 2 cung liền kề tự
+            // động là đoạn thẳng — phần mép đường thẳng chưa bị bo, không cần vẽ riêng)
             const boundary = [];
             fillets.forEach(f => boundary.push(...f.arcPts));
             const boundaryFlat = boundary.map(p => new THREE.Vector3(p.x, p.y, dispElev));
 
+            // Biên trong (lòng đường xe chạy) — nếu dựng được (Assembly có Bó vỉa/Vỉa hè riêng biệt)
+            const innerBoundary = [];
+            if (hasInnerRing) innerFillets.forEach(f => innerBoundary.push(...f.arcPts));
+            const innerBoundaryFlat = innerBoundary.map(p => new THREE.Vector3(p.x, p.y, dispElev));
+            // Phần "lòng đường" dùng để dựng kết cấu áo đường + tô màu Làn xe — nếu không tách được
+            // biên trong thì dùng luôn biên ngoài (coi cả mảng giao là lòng đường, như trước đây).
+            const drivableBoundaryFlat = hasInnerRing ? innerBoundaryFlat : boundaryFlat;
+
+            // Mặt Vỉa hè (dải viền quanh góc bo, giữa biên ngoài và biên trong) — dùng Shape có "lỗ"
+            // (hole) để ShapeGeometry tự dựng đúng hình vành khăn, không cần tam giác hoá tay.
+            if (hasInnerRing) {
+                const sidewalkColor = ASSEMBLY_TYPE_COLORS.sidewalk || 0x9a6b3a;
+                const outerShape = new THREE.Shape(boundaryFlat.map(p => new THREE.Vector2(p.x, p.y)));
+                outerShape.holes.push(new THREE.Path(innerBoundaryFlat.map(p => new THREE.Vector2(p.x, p.y))));
+                const sidewalkGeo = new THREE.ShapeGeometry(outerShape);
+                sidewalkGeo.translate(0, 0, dispElev);
+                const sidewalkMesh = new THREE.Mesh(sidewalkGeo, new THREE.MeshBasicMaterial({ color: sidewalkColor, side: THREE.DoubleSide }));
+                sidewalkMesh.userData.isIntersectionMesh = true;
+                group.add(sidewalkMesh);
+                // Viền biên trong (ranh giới lòng đường/vỉa hè) cho dễ nhìn
+                group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(innerBoundaryFlat), new THREE.LineBasicMaterial({ color: 0xffffff })));
+            }
+
+            // Mặt lòng đường (Làn xe)
             const fillMat = new THREE.MeshBasicMaterial({ color: ASSEMBLY_TYPE_COLORS.lane || 0x555560, side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
-            const shape = new THREE.Shape(boundaryFlat.map(p => new THREE.Vector2(p.x, p.y)));
+            const shape = new THREE.Shape(drivableBoundaryFlat.map(p => new THREE.Vector2(p.x, p.y)));
             const geo = new THREE.ShapeGeometry(shape);
             // ShapeGeometry dựng trên mặt phẳng XY tại z=0 -> dịch lên đúng cao độ đã tính
             geo.translate(0, 0, dispElev);
@@ -188,7 +277,7 @@
             mesh.userData.isIntersectionMesh = true;
             group.add(mesh);
 
-            // Viền + nhãn
+            // Viền ngoài cùng + nhãn
             const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(boundaryFlat), new THREE.LineBasicMaterial({ color: 0xffffff }));
             group.add(outline);
             const labelH = Math.max(cornerRadius * 0.35, 0.3);
@@ -197,14 +286,13 @@
                 crossing.point.clone().setZ(dispElev + labelH * 2), labelH
             ));
 
-            // Kết cấu áo đường cho cả mảng giao — lấy đúng các lớp khai báo phạm vi "Làn xe" (BTXM,
-            // CPĐD...) trong Assembly Editor, áp DÙNG CHUNG cho toàn bộ mảng giao (vì Intersection ở
-            // đây chưa phân biệt vùng làn xe/vỉa hè riêng như Corridor — coi cả mảng là mặt đường xe
-            // chạy, hợp lý với đa số nút giao thực tế: mặt đường trải liền 1 kết cấu qua cả ngã tư).
+            // Kết cấu áo đường cho phần LÒNG ĐƯỜNG — lấy đúng các lớp khai báo phạm vi "Làn xe" (BTXM,
+            // CPĐD...) trong Assembly Editor. Vỉa hè bao quanh góc bo (nếu có) hiện chỉ tô màu phẳng,
+            // chưa có kết cấu riêng theo lớp (dải vỉa hè mỏng, ít ảnh hưởng hình dạng tổng thể).
             let cumThickness = 0;
             pavementLayers.filter(l => l.appliesTo === 'lane' && l.unit === 'area').forEach(layer => {
                 const color = layer.color !== undefined ? layer.color : 0x888888;
-                group.add(buildFlatLayerVolume(boundaryFlat, dispElev - cumThickness, layer.thickness, color));
+                group.add(buildFlatLayerVolume(drivableBoundaryFlat, dispElev - cumThickness, layer.thickness, color));
                 cumThickness += layer.thickness;
             });
 
@@ -213,7 +301,8 @@
                 alignmentA: alignA.object.userData.alignmentInfo.name,
                 alignmentB: alignB.object.userData.alignmentInfo.name,
                 cornerRadius, roadEdgeWidth: w,
-                flattenElevSource: source
+                flattenElevSource: source,
+                anyClamped
             };
 
             // Tự tìm Corridor ĐÃ CÓ SẴN của 2 tuyến này (nếu có) và rebuild lại với vùng cắt vừa tính,
@@ -277,7 +366,10 @@
                 setCommandText('Command: ' + result.error);
             } else {
                 execute(makeAddCommand('INTERSECTION', result.group));
-                setCommandText(`Command: Đã tạo Intersection giữa "${result.group.userData.intersectionInfo.alignmentA}" và "${result.group.userData.intersectionInfo.alignmentB}".`);
+                const clampNote = result.group.userData.intersectionInfo.anyClamped
+                    ? ' (Lưu ý: góc giao khá xiên nên 1 vài góc bo đã tự giảm bán kính nhỏ hơn yêu cầu để tránh cung bo văng ra quá xa.)'
+                    : '';
+                setCommandText(`Command: Đã tạo Intersection giữa "${result.group.userData.intersectionInfo.alignmentA}" và "${result.group.userData.intersectionInfo.alignmentB}".${clampNote}`);
             }
             pendingIntersectionAlignA = null; pendingIntersectionAlignB = null;
             setTool('select');
