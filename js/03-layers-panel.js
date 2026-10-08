@@ -143,50 +143,48 @@
 
         // CODE MỚI DÙNG WASM TRỰC TIẾP TRÊN TRÌNH DUYỆT:
       document.getElementById('fileInput').addEventListener('change', async function(e) {
-          const file = e.target.files[0];
-          if (!file) return;
+    const file = e.target.files[0];
+    if (!file) return;
 
-         const cmdLine = document.getElementById('command-line');
-         if (cmdLine) cmdLine.innerText = `Command: Loading and processing ${file.name}...`;
-    
-         const isDWG = file.name.toLowerCase().endsWith('.dwg');
+    const cmdLine = document.getElementById('command-line');
+    if (cmdLine) cmdLine.innerText = `Command: Loading and processing ${file.name}...`;
 
-         if (isDWG) {
-             try {
-                 if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
-            
-                 const buffer = await file.arrayBuffer();
-                 const bytes = new Uint8Array(buffer);
+    const isDWG = file.name.toLowerCase().endsWith('.dwg');
 
-                 // Kiểm tra và gọi module Wasm đã load ở index.html
-                 if (typeof parse_dwg_bytes === 'function') {
-                     const result = parse_dwg_bytes(bytes);
-                     console.log("Kêt quả phân tích DWG qua Wasm:", result);
+    if (isDWG) {
+        try {
+            if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
 
-                     if (cmdLine) {
-                         cmdLine.innerText = `Command: Đọc xong DWG thành công! Tìm thấy ${result.entities_count} thực thể.`;
-                     }
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
 
-                     // Chuyển kết quả sang định dạng DXF/Entities để render ra 3D nếu cần
-                     if (result && result.entities && typeof renderOptimized2D === 'function') {
-                         // Chuyển dạng dữ liệu Wasm thành cấu trúc dxf đơn giản để render
-                         renderOptimized2D({ entities: result.entities }, file.name);
-                     }
-                 } else {
-                     throw new Error("Wasm DWG parser chưa được khởi tạo!");
-                 }
-             } catch (err) {
-                 console.error(err);
-                 if (cmdLine) cmdLine.innerText = `Command: Error - ${err.message || err}`;
-             }
-         } else {
-             const reader = new FileReader();
-             reader.onload = function(evt) {
-                 parseAndRenderDXF(evt.target.result, file.name);
-             };
-             reader.readAsText(file);
-         }
-     });
+            // Kiểm tra hàm Wasm từ window
+            if (typeof window.parse_dwg_bytes === 'function') {
+                const result = window.parse_dwg_bytes(bytes);
+                console.log("Kết quả phân tích DWG qua Wasm:", result);
+
+                if (cmdLine) {
+                    cmdLine.innerText = `Command: Đọc xong DWG thành công! Tìm thấy ${result.entities_count || 0} thực thể.`;
+                }
+
+                if (result && result.entities && typeof renderOptimized2D === 'function') {
+                    renderOptimized2D({ entities: result.entities }, file.name);
+                }
+            } else {
+                throw new Error("Wasm DWG parser chưa được khởi tạo!");
+            }
+        } catch (err) {
+            console.error(err);
+            if (cmdLine) cmdLine.innerText = `Command: Error - ${err.message || err}`;
+        }
+    } else {
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            parseAndRenderDXF(evt.target.result, file.name);
+        };
+        reader.readAsText(file);
+    }
+});
 
         function parseAndRenderDXF(fileText, filename) {
             try {
