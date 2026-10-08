@@ -445,54 +445,62 @@
 
     <!-- TÍCH HỢP WASM PARSER CHO FILE DWG -->
     <script type="module">
-        import initWasm, { parse_dwg_bytes } from './pkg/dwg_wasm_parser.js';
+    import initWasm, { parse_dwg_bytes } from './pkg/dwg_wasm_parser.js';
 
-        async function initDwgWasmEngine() {
-            try {
-                await initWasm();
-                console.log("DWG Wasm Module loaded successfully!");
+    async function initDwgWasmEngine() {
+        try {
+            await initWasm();
+            console.log("DWG Wasm Module loaded successfully!");
 
-                const fileInput = document.getElementById('fileInput');
-                if (!fileInput) return;
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput) return;
 
-                fileInput.addEventListener('change', async (e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
+            // Thay thế listener cũ để ngăn chặn việc gọi API /api/convert-dwg
+            fileInput.onchange = async (e) => {
+                e.stopImmediatePropagation(); // Chặn các script khác (như 03-layers-panel.js) lắng nghe sự kiện này
 
-                    const filename = file.name.toLowerCase();
-                    const cmdLine = document.getElementById('command-line');
+                const file = e.target.files[0];
+                if (!file) return;
 
-                    if (filename.endsWith('.dwg')) {
-                        if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
+                const filename = file.name.toLowerCase();
+                const cmdLine = document.getElementById('command-line');
 
-                        try {
-                            const buffer = await file.arrayBuffer();
-                            const bytes = new Uint8Array(buffer);
+                if (filename.endsWith('.dwg')) {
+                    if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
 
-                            // Phân tích file DWG bằng Rust Wasm
-                            const result = parse_dwg_bytes(bytes);
-                            console.log("Kêt quả phân tích DWG:", result);
+                    try {
+                        const buffer = await file.arrayBuffer();
+                        const bytes = new Uint8Array(buffer);
 
-                            if (cmdLine) {
-                                cmdLine.innerText = `Command: Đọc xong DWG thành công! Tổng số thực thể: ${result.entities_count}`;
-                            }
+                        // 1. Phân tích file DWG bằng Rust Wasm
+                        const result = parse_dwg_bytes(bytes);
+                        console.log("Kết quả phân tích DWG:", result);
 
-                            // Nếu hệ thống đã có hàm vẽ/nạp dữ liệu từ Wasm, gọi hàm đó tại đây
-                            if (typeof window.loadCadDataFromWasm === 'function') {
-                                window.loadCadDataFromWasm(result);
-                            }
-                        } catch (err) {
-                            console.error("Lỗi đọc file DWG:", err);
-                            if (cmdLine) cmdLine.innerText = `Command Error: Lỗi phân tích DWG - ${err}`;
+                        if (cmdLine) {
+                            cmdLine.innerText = `Command: Đọc xong DWG thành công! Tìm thấy ${result.entities_count} thực thể.`;
                         }
-                    }
-                });
-            } catch (err) {
-                console.warn("Chưa thể khởi tạo Wasm DWG Engine:", err);
-            }
-        }
 
-        initDwgWasmEngine();
-    </script>
+                        // 2. Chuyển đổi dữ liệu từ Wasm sang định dạng Three.js/CAD Engine để hiển thị
+                        if (result && result.entities && window.cadEngine) {
+                            // Gọi hàm nạp thực thể của CAD Engine (hoặc tự vẽ các đường entities)
+                            if (typeof window.renderWasmEntities === 'function') {
+                                window.renderWasmEntities(result.entities);
+                            } else {
+                                console.log("Các thực thể đọc được từ DWG:", result.entities);
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Lỗi đọc file DWG:", err);
+                        if (cmdLine) cmdLine.innerText = `Command Error: Lỗi phân tích DWG - ${err.message || err}`;
+                    }
+                }
+            };
+        } catch (err) {
+            console.warn("Chưa thể khởi tạo Wasm DWG Engine:", err);
+        }
+    }
+
+    initDwgWasmEngine();
+  </script>
 </body>
 </html>
