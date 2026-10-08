@@ -188,39 +188,59 @@ document.getElementById('fileInput').addEventListener('change', async function(e
     }
 });
 
-// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn
+// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn bằng Deep Scan
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
 
-    return wasmEntities.map(rawEnt => {
-        // Chuyển toàn bộ key trong object thành chữ thường để không bị lỗi Hoa/Thường
-        const ent = {};
-        for (let k in rawEnt) {
-            ent[k.toLowerCase()] = rawEnt[k];
+    // Hàm lấy tất cả các thuộc tính của object kể cả trong Prototype
+    const getAllKeys = (obj) => {
+        let keys = new Set();
+        let curr = obj;
+        while (curr && curr !== Object.prototype) {
+            Object.getOwnPropertyNames(curr).forEach(k => keys.add(k));
+            curr = Object.getPrototypeOf(curr);
         }
+        return Array.from(keys);
+    };
+
+    return wasmEntities.map(rawEnt => {
+        if (!rawEnt) return { type: 'LINE', layer: '0', vertices: [] };
+
+        const allKeys = getAllKeys(rawEnt);
+        const ent = {};
+
+        // Copy thuộc tính và xử lý các hàm getter nếu có
+        allKeys.forEach(k => {
+            try {
+                const val = rawEnt[k];
+                ent[k.toLowerCase()] = (typeof val === 'function') ? val.call(rawEnt) : val;
+            } catch (e) {}
+        });
 
         const type = String(ent.type || ent.entity_type || ent.kind || 'LINE').toUpperCase();
         const layer = String(ent.layer || ent.layer_name || '0');
         let vertices = [];
 
-        // Trích xuất điểm từ mọi kiểu mảng (vertices, points, path, coordinates...)
-        const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates;
+        // 1. Quét mảng đỉnh
+        const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates || ent.pts;
         if (Array.isArray(rawPts) && rawPts.length > 0) {
             vertices = rawPts.map(v => {
-                if (typeof v === 'object' && v !== null) {
-                    return { x: v.x ?? v[0] ?? 0, y: v.y ?? v[1] ?? 0, z: v.z ?? v[2] ?? 0 };
+                if (Array.isArray(v)) {
+                    return { x: v[0] || 0, y: v[1] || 0, z: v[2] || 0 };
+                } else if (typeof v === 'object' && v !== null) {
+                    return { x: v.x ?? v.X ?? 0, y: v.y ?? v.Y ?? 0, z: v.z ?? v.Z ?? 0 };
                 }
                 return { x: 0, y: 0, z: 0 };
             });
         } 
-        // Trích xuất 2 điểm từ start/end, start_point/end_point, p1/p2, v1/v2, startpoint/endpoint
+        // 2. Quét điểm đầu/cuối (Line)
         else {
             const p1 = ent.start_point || ent.startpoint || ent.start || ent.p1 || ent.v1 || ent.from;
             const p2 = ent.end_point || ent.endpoint || ent.end || ent.p2 || ent.v2 || ent.to;
             if (p1 && p2) {
                 vertices = [
-                    { x: p1.x ?? p1[0] ?? 0, y: p1.y ?? p1[1] ?? 0, z: p1.z ?? p1[2] ?? 0 },
-                    { x: p2.x ?? p2[0] ?? 0, y: p2.y ?? p2[1] ?? 0, z: p2.z ?? p2[2] ?? 0 }
+                    { x: p1.x ?? p1.X ?? p1[0] ?? 0, y: p1.y ?? p1.Y ?? p1[1] ?? 0, z: p1.z ?? p1.Z ?? p1[2] ?? 0 },
+                    { x: p2.x ?? p2.X ?? p2[0] ?? 0, y: p2.y ?? p2.Y ?? p2[1] ?? 0, z: p2.z ?? p2.Z ?? p2[2] ?? 0 }
                 ];
             } else if (ent.x1 !== undefined && ent.y1 !== undefined) {
                 vertices = [
@@ -230,14 +250,14 @@ function normalizeWasmEntities(wasmEntities) {
             }
         }
 
-        // Vị trí điểm chèn / Tâm
+        // 3. Vị trí điểm chèn / Tâm
         let position = null;
         const pos = ent.position || ent.center || ent.insertionpoint || ent.location;
         if (pos) {
             position = {
-                x: pos.x ?? pos[0] ?? 0,
-                y: pos.y ?? pos[1] ?? 0,
-                z: pos.z ?? pos[2] ?? 0
+                x: pos.x ?? pos.X ?? pos[0] ?? 0,
+                y: pos.y ?? pos.Y ?? pos[1] ?? 0,
+                z: pos.z ?? pos.Z ?? pos[2] ?? 0
             };
         } else if (ent.x !== undefined && ent.y !== undefined) {
             position = { x: ent.x, y: ent.y, z: ent.z ?? 0 };
