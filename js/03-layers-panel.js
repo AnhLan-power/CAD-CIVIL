@@ -158,17 +158,18 @@
             const buffer = await file.arrayBuffer();
             const bytes = new Uint8Array(buffer);
 
-            // Kiểm tra hàm Wasm từ window
             if (typeof window.parse_dwg_bytes === 'function') {
                 const result = window.parse_dwg_bytes(bytes);
                 console.log("Kết quả phân tích DWG qua Wasm:", result);
 
                 if (cmdLine) {
-                    cmdLine.innerText = `Command: Đọc xong DWG thành công! Tìm thấy ${result.entities_count || 0} thực thể.`;
+                    cmdLine.innerText = `Command: Đọc xong DWG! Tìm thấy ${result.entities_count || 0} thực thể.`;
                 }
 
-                if (result && result.entities && typeof renderOptimized2D === 'function') {
-                    renderOptimized2D({ entities: result.entities }, file.name);
+                if (result && result.entities) {
+                    // Chuyển đổi dữ liệu từ Wasm sang chuẩn DxfParser
+                    const normalizedEntities = normalizeWasmEntities(result.entities);
+                    renderOptimized2D({ entities: normalizedEntities }, file.name);
                 }
             } else {
                 throw new Error("Wasm DWG parser chưa được khởi tạo!");
@@ -185,6 +186,50 @@
         reader.readAsText(file);
     }
 });
+
+// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn
+function normalizeWasmEntities(wasmEntities) {
+    return wasmEntities.map(ent => {
+        const type = (ent.type || ent.entity_type || 'LINE').toUpperCase();
+        const layer = ent.layer || ent.layer_name || '0';
+        let vertices = [];
+
+        // 1. Trường hợp đã có vertices dạng mảng
+        if (Array.isArray(ent.vertices)) {
+            vertices = ent.vertices.map(v => ({ x: v.x ?? v[0] ?? 0, y: v.y ?? v[1] ?? 0 }));
+        } 
+        // 2. Trường hợp dạng Line có start/end point (start_point / end_point)
+        else if (ent.start_point && ent.end_point) {
+            vertices = [
+                { x: ent.start_point.x ?? ent.start_point[0], y: ent.start_point.y ?? ent.start_point[1] },
+                { x: ent.end_point.x ?? ent.end_point[0], y: ent.end_point.y ?? ent.end_point[1] }
+            ];
+        } 
+        // 3. Trường hợp tọa độ phẳng x1, y1, x2, y2
+        else if (ent.x1 !== undefined && ent.y1 !== undefined) {
+            vertices = [
+                { x: ent.x1, y: ent.y1 },
+                { x: ent.x2 ?? ent.x1, y: ent.y2 ?? ent.y1 }
+            ];
+        }
+
+        // Tọa độ chèn Text / Insert
+        let position = undefined;
+        if (ent.position) {
+            position = { x: ent.position.x ?? ent.position[0], y: ent.position.y ?? ent.position[1] };
+        } else if (ent.x !== undefined && ent.y !== undefined) {
+            position = { x: ent.x, y: ent.y };
+        }
+
+        return {
+            type: type,
+            layer: layer,
+            vertices: vertices,
+            position: position,
+            text: ent.text || ent.string_value || ent.value || ''
+        };
+    });
+}
 
         function parseAndRenderDXF(fileText, filename) {
             try {
