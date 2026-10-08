@@ -1,0 +1,15 @@
+{
+  "name": "dwg_wasm_parser",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "dwg_wasm_parser_bg.wasm",
+    "dwg_wasm_parser.js",
+    "dwg_wasm_parser.d.ts"
+  ],
+  "main": "dwg_wasm_parser.js",
+  "types": "dwg_wasm_parser.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

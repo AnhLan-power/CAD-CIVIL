@@ -14,12 +14,7 @@
 </head>
 <body>
 
-    <!-- ============================================================================================
-         CỔNG DÙNG THỬ (TRIAL GATE): chạy hoàn toàn phía trình duyệt (không có server), nên chỉ đủ
-         chặn người dùng thông thường — người rành kỹ thuật vẫn có thể mở DevTools xoá localStorage để
-         "reset" lại 30 ngày. Nếu sau này có server, nên chuyển việc kiểm tra hạn dùng + mã kích hoạt
-         sang phía server để chặn thật sự.
-         ============================================================================================ -->
+    <!-- CỔNG DÙNG THỬ (TRIAL GATE) -->
     <div id="trial-login-overlay" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(10,10,12,0.97); align-items:center; justify-content:center; flex-direction:column; font-family:inherit;">
         <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:32px 36px; width:360px; max-width:90vw;">
             <h2 style="color:#7fffd4; margin:0 0 6px; font-size:20px;">Dùng thử phần mềm</h2>
@@ -66,7 +61,7 @@
                 <div class="group-title">Palettes</div>
             </div>
 
-            <!-- NHÓM DRAW: 2 cột dòng-gọn, giống panel Modify/Create Ground Data thật -->
+            <!-- NHÓM DRAW -->
             <div class="ribbon-group">
                 <div class="group-tools">
                     <div class="group-col">
@@ -83,7 +78,7 @@
                 <div class="group-title">Draw</div>
             </div>
 
-            <!-- NHÓM MODIFY: 3 cột x 2-3 dòng, giống grid Move/Rotate/Trim/Copy... thật -->
+            <!-- NHÓM MODIFY -->
             <div class="ribbon-group">
                 <div class="group-tools">
                     <div class="group-col">
@@ -168,7 +163,7 @@
             </div>
         </div>
 
-        <!-- TAB ANNOTATE: Text + Dimensions -->
+        <!-- TAB ANNOTATE -->
         <div class="ribbon-content ribbon-panel" id="ribbon-panel-annotate" style="display: none;">
             <div class="ribbon-group">
                 <div class="group-tools">
@@ -190,7 +185,6 @@
             </div>
         </div>
 
-        <!-- Panel dùng chung cho các tab chưa triển khai công cụ -->
         <div class="ribbon-content ribbon-panel" id="ribbon-panel-placeholder" style="display: none; align-items: center; justify-content: center; color: #777; font-size: 12px;">
             Các công cụ ở tab này chưa được triển khai.
         </div>
@@ -282,7 +276,7 @@
         </div>
         <div id="assembly-panel-body" class="panel-body"></div>
         <div style="padding: 8px 10px; font-size: 11px; color: #999; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); background: #181818;">
-            <b style="color:#7fffd4;">Kết cấu áo đường</b> (dùng để bóc khối lượng khi chạy Trắc ngang) — "Đắp nền" tự tính, không khai báo ở đây.
+            <b style="color:#7fffd4;">Kết cấu áo đường</b>
         </div>
         <div id="pavement-layers-body" style="padding: 6px 10px;"></div>
         <div style="display: flex; gap: 8px; padding: 0 10px 8px;">
@@ -294,14 +288,14 @@
         </div>
     </div>
 
-    <!-- Ô NHẬP CHIỀU DÀI ĐƯỜNG CONG ĐỨNG (trước khi bắt đầu click các PVI ngay trên bản vẽ) -->
+    <!-- POPUPS & INPUTS -->
     <div id="profile-curve-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Chiều dài đường cong đứng:</span>
         <input type="text" id="profile-curve-length-field" value="20" style="width: 80px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
         <span style="font-size: 11px; color: #888; white-space: nowrap;">Enter để bắt đầu click PVI (Esc = chỉ tạo EG, bỏ qua FG)</span>
     </div>
 
-    <!-- COMPASS ĐIỀU HƯỚNG (ViewCube rút gọn) -->
+    <!-- COMPASS -->
     <div id="nav-compass" title="Điều hướng góc nhìn">
         <div class="compass-ring">
             <button class="compass-dir compass-n" onclick="setCompassAzimuth(0)">N</button>
@@ -327,19 +321,16 @@
     <div id="selection-box" style="position: absolute; display: none; z-index: 15; pointer-events: none; box-sizing: border-box;"></div>
     <div id="snap-marker" style="position: absolute; display: none; width: 12px; height: 12px; border: 2px solid #00ff88; z-index: 16; pointer-events: none; transform: translate(-50%, -50%); box-sizing: border-box;"></div>
 
-    <!-- Ô NHẬP NỘI DUNG TEXT (thay cho window.prompt vì nhiều trình duyệt/khung nhúng chặn hộp thoại native) -->
     <div id="text-input-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Nội dung Text:</span>
         <input type="text" id="text-input-field" placeholder="Nhập rồi nhấn Enter (Esc để huỷ)" style="width: 280px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
     </div>
 
-    <!-- Ô NHẬP CAO ĐỘ CHO POINT -->
     <div id="point-elevation-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Cao độ (Z):</span>
         <input type="text" id="point-elevation-field" placeholder="Nhập rồi Enter (Esc huỷ)" style="width: 120px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
     </div>
 
-    <!-- Ô NHẬP SỐ (Dynamic Input kiểu AutoCAD): khoảng cách/góc cho Line-Polyline, dx/dy cho Rectangle, bán kính cho Circle -->
     <div id="numeric-input-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 6px;">
         <span id="numeric-input-label1" style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Khoảng cách:</span>
         <input type="text" id="numeric-input-field1" style="width: 90px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
@@ -348,14 +339,11 @@
         <span style="font-size: 11px; color: #888; white-space: nowrap;">Tab chuyển ô, Enter xác nhận, Esc huỷ</span>
     </div>
 
-    <!-- BẢNG TUỲ CHỌN HATCH -->
-    <!-- Ô NHẬP KHOẢNG CÁCH OFFSET -->
     <div id="offset-distance-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Khoảng cách Offset:</span>
         <input type="text" id="offset-distance-field" placeholder="Nhập rồi Enter (Esc huỷ)" style="width: 140px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
     </div>
 
-    <!-- Ô NHẬP THÔNG SỐ ALIGNMENT -->
     <div id="alignment-options-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 8px 10px; flex-direction: column; gap: 6px; width: 360px;">
         <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 12px; color: #7fffd4; width: 90px;">Tên Alignment:</span>
@@ -373,7 +361,6 @@
         </div>
     </div>
 
-    <!-- Ô NHẬP KHOẢNG CÁCH MẶT CẮT CORRIDOR -->
     <div id="corridor-interval-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Khoảng cách giữa các mặt cắt:</span>
         <input type="text" id="corridor-interval-field" value="10" style="width: 60px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
@@ -382,7 +369,6 @@
         <span style="font-size: 11px; color: #888;">Enter để tạo, Esc để huỷ</span>
     </div>
 
-    <!-- Ô NHẬP THÔNG SỐ TRẮC NGANG (khoảng cách cọc + phạm vi lấy mẫu EG mỗi bên + hệ số taluy) -->
     <div id="section-interval-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Khoảng cách cọc:</span>
         <input type="text" id="section-interval-field" value="20" style="width: 50px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
@@ -390,12 +376,11 @@
         <input type="text" id="section-halfwidth-field" value="15" style="width: 50px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Taluy (1:m):</span>
         <input type="text" id="section-taluy-field" value="1.5" style="width: 45px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
-        <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Phóng đại đứng (bỏ trống = tự động):</span>
+        <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Phóng đại đứng:</span>
         <input type="text" id="section-vertexag-field" value="" placeholder="tự động" style="width: 55px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
-        <span style="font-size: 11px; color: #888;">Enter để tiếp tục (chọn vị trí đặt), Esc để huỷ</span>
+        <span style="font-size: 11px; color: #888;">Enter để tiếp tục, Esc để huỷ</span>
     </div>
 
-    <!-- Ô NHẬP BÁN KÍNH BO GÓC INTERSECTION -->
     <div id="intersection-radius-popup" style="display: none; position: absolute; bottom: 55px; left: 10px; z-index: 25; background: #1e1e1e; border: 1px solid var(--accent-color); border-radius: 3px; padding: 6px 8px; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: #7fffd4; white-space: nowrap;">Bán kính bo góc (m):</span>
         <input type="text" id="intersection-radius-field" value="8" style="width: 60px; background: #2a2a2a; border: 1px solid #444; color: #fff; font-size: 12px; padding: 4px 6px; border-radius: 2px; outline: none;" />
@@ -442,8 +427,7 @@
         </div>
     </div>
 
-    <!-- Script được tách theo từng hạng mục chức năng để dễ kiểm soát/chỉnh sửa — PHẢI giữ đúng thứ
-         tự này khi tải lên GitHub (thứ tự load quyết định thứ tự khai báo biến/hàm dùng chung). -->
+    <!-- Các file JS cấu trúc ứng dụng -->
     <script src="js/01-core-init.js"></script>
     <script src="js/02-assembly.js"></script>
     <script src="js/03-layers-panel.js"></script>
@@ -458,5 +442,57 @@
     <script src="js/12-intersections.js"></script>
     <script src="js/13-hatch-offset.js"></script>
     <script src="js/14-trim-and-events.js"></script>
+
+    <!-- TÍCH HỢP WASM PARSER CHO FILE DWG -->
+    <script type="module">
+        import initWasm, { parse_dwg_bytes } from './pkg/dwg_wasm_parser.js';
+
+        async function initDwgWasmEngine() {
+            try {
+                await initWasm();
+                console.log("DWG Wasm Module loaded successfully!");
+
+                const fileInput = document.getElementById('fileInput');
+                if (!fileInput) return;
+
+                fileInput.addEventListener('change', async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const filename = file.name.toLowerCase();
+                    const cmdLine = document.getElementById('command-line');
+
+                    if (filename.endsWith('.dwg')) {
+                        if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
+
+                        try {
+                            const buffer = await file.arrayBuffer();
+                            const bytes = new Uint8Array(buffer);
+
+                            // Phân tích file DWG bằng Rust Wasm
+                            const result = parse_dwg_bytes(bytes);
+                            console.log("Kêt quả phân tích DWG:", result);
+
+                            if (cmdLine) {
+                                cmdLine.innerText = `Command: Đọc xong DWG thành công! Tổng số thực thể: ${result.entities_count}`;
+                            }
+
+                            // Nếu hệ thống đã có hàm vẽ/nạp dữ liệu từ Wasm, gọi hàm đó tại đây
+                            if (typeof window.loadCadDataFromWasm === 'function') {
+                                window.loadCadDataFromWasm(result);
+                            }
+                        } catch (err) {
+                            console.error("Lỗi đọc file DWG:", err);
+                            if (cmdLine) cmdLine.innerText = `Command Error: Lỗi phân tích DWG - ${err}`;
+                        }
+                    }
+                });
+            } catch (err) {
+                console.warn("Chưa thể khởi tạo Wasm DWG Engine:", err);
+            }
+        }
+
+        initDwgWasmEngine();
+    </script>
 </body>
 </html>
