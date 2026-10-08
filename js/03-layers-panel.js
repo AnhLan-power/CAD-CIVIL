@@ -164,7 +164,7 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
             if (typeof window.parse_dwg_bytes === 'function') {
                 const result = window.parse_dwg_bytes(bytes);
-                console.log("Kết quả phân tích DWG qua Wasm:", result);
+                console.log("MẪU THỰC THỂ ĐẦU TIÊN (MỞ RA XEM TÊN THUỘC TÍNH):", result?.entities?.[0]);
 
                 if (result && result.entities) {
                     const normalizedEntities = normalizeWasmEntities(result.entities);
@@ -193,42 +193,41 @@ function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
 
     return wasmEntities.map(ent => {
-        const type = String(ent.type || ent.entity_type || 'LINE').toUpperCase();
+        const type = String(ent.type || ent.entity_type || ent.kind || 'LINE').toUpperCase();
         const layer = ent.layer || ent.layer_name || '0';
         let vertices = [];
 
-        // 1. Tìm các tập hợp điểm (vertices / points / path)
-        const rawPts = ent.vertices || ent.points || ent.path;
+        // Trích xuất điểm linh hoạt từ mọi kiểu mảng (vertices, points, path, coordinates...)
+        const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates;
         if (Array.isArray(rawPts) && rawPts.length > 0) {
-            vertices = rawPts.map(v => ({
-                x: v.x ?? v[0] ?? 0,
-                y: v.y ?? v[1] ?? 0,
-                z: v.z ?? v[2] ?? 0
-            }));
+            vertices = rawPts.map(v => {
+                if (typeof v === 'object' && v !== null) {
+                    return { x: v.x ?? v[0] ?? 0, y: v.y ?? v[1] ?? 0, z: v.z ?? v[2] ?? 0 };
+                }
+                return { x: 0, y: 0, z: 0 };
+            });
         } 
-        // 2. Điểm đầu và điểm cuối
-        else if (ent.start_point || ent.start || ent.p1) {
-            const p1 = ent.start_point || ent.start || ent.p1;
-            const p2 = ent.end_point || ent.end || ent.p2;
+        // Lấy tọa độ 2 điểm (Line) từ start/end, start_point/end_point, p1/p2, v1/v2
+        else {
+            const p1 = ent.start_point || ent.start || ent.p1 || ent.v1 || ent.from;
+            const p2 = ent.end_point || ent.end || ent.p2 || ent.v2 || ent.to;
             if (p1 && p2) {
                 vertices = [
                     { x: p1.x ?? p1[0] ?? 0, y: p1.y ?? p1[1] ?? 0, z: p1.z ?? p1[2] ?? 0 },
                     { x: p2.x ?? p2[0] ?? 0, y: p2.y ?? p2[1] ?? 0, z: p2.z ?? p2[2] ?? 0 }
                 ];
+            } else if (ent.x1 !== undefined && ent.y1 !== undefined) {
+                vertices = [
+                    { x: ent.x1, y: ent.y1, z: ent.z1 ?? 0 },
+                    { x: ent.x2 ?? ent.x1, y: ent.y2 ?? ent.y1, z: ent.z2 ?? 0 }
+                ];
             }
-        } 
-        // 3. Tọa độ phẳng x1, y1, x2, y2
-        else if (ent.x1 !== undefined && ent.y1 !== undefined) {
-            vertices = [
-                { x: ent.x1, y: ent.y1, z: ent.z1 ?? 0 },
-                { x: ent.x2 ?? ent.x1, y: ent.y2 ?? ent.y1, z: ent.z2 ?? 0 }
-            ];
         }
 
-        // Tọa độ vị trí chèn
+        // Vị trí điểm chèn / Tâm
         let position = null;
-        if (ent.position || ent.center) {
-            const pos = ent.position || ent.center;
+        const pos = ent.position || ent.center || ent.insertionPoint || ent.location;
+        if (pos) {
             position = {
                 x: pos.x ?? pos[0] ?? 0,
                 y: pos.y ?? pos[1] ?? 0,
@@ -244,7 +243,7 @@ function normalizeWasmEntities(wasmEntities) {
             vertices: vertices,
             position: position,
             radius: ent.radius || ent.r || 0,
-            text: ent.text || ent.string_value || ent.value || ''
+            text: ent.text || ent.string_value || ent.value || ent.contents || ''
         };
     });
 }
@@ -324,7 +323,7 @@ function renderOptimized2D(dxf, filename) {
     });
     renderLayersPanel();
 
-    // Thêm Group vào scene mà KHÔNG dịch chuyển vị trí
+    // Thêm Group vào scene
     scene.add(group);
     currentModel = group;
 
