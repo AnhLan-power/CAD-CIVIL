@@ -450,7 +450,12 @@
     async function initDwgWasmEngine() {
         try {
             await initWasm();
+            window.parse_dwg_bytes = parse_dwg_bytes; // Gán ra window để JS khác gọi được
             console.log("DWG Wasm Module loaded successfully!");
+        } catch (err) {
+            console.warn("Chưa thể khởi tạo Wasm DWG Engine:", err);
+        }
+    }
 
             const fileInput = document.getElementById('fileInput');
             if (!fileInput) return;
