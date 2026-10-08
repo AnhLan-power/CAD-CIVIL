@@ -164,7 +164,7 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
             if (typeof window.parse_dwg_bytes === 'function') {
                 const result = window.parse_dwg_bytes(bytes);
-                console.log("MẪU THỰC THỂ ĐẦU TIÊN (MỞ RA XEM TÊN THUỘC TÍNH):", result?.entities?.[0]);
+                console.log("DWG Parsing raw result:", result);
 
                 if (result && result.entities) {
                     const normalizedEntities = normalizeWasmEntities(result.entities);
@@ -192,12 +192,18 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
 
-    return wasmEntities.map(ent => {
+    return wasmEntities.map(rawEnt => {
+        // Chuyển toàn bộ key trong object thành chữ thường để không bị lỗi Hoa/Thường
+        const ent = {};
+        for (let k in rawEnt) {
+            ent[k.toLowerCase()] = rawEnt[k];
+        }
+
         const type = String(ent.type || ent.entity_type || ent.kind || 'LINE').toUpperCase();
-        const layer = ent.layer || ent.layer_name || '0';
+        const layer = String(ent.layer || ent.layer_name || '0');
         let vertices = [];
 
-        // Trích xuất điểm linh hoạt từ mọi kiểu mảng (vertices, points, path, coordinates...)
+        // Trích xuất điểm từ mọi kiểu mảng (vertices, points, path, coordinates...)
         const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates;
         if (Array.isArray(rawPts) && rawPts.length > 0) {
             vertices = rawPts.map(v => {
@@ -207,10 +213,10 @@ function normalizeWasmEntities(wasmEntities) {
                 return { x: 0, y: 0, z: 0 };
             });
         } 
-        // Lấy tọa độ 2 điểm (Line) từ start/end, start_point/end_point, p1/p2, v1/v2
+        // Trích xuất 2 điểm từ start/end, start_point/end_point, p1/p2, v1/v2, startpoint/endpoint
         else {
-            const p1 = ent.start_point || ent.start || ent.p1 || ent.v1 || ent.from;
-            const p2 = ent.end_point || ent.end || ent.p2 || ent.v2 || ent.to;
+            const p1 = ent.start_point || ent.startpoint || ent.start || ent.p1 || ent.v1 || ent.from;
+            const p2 = ent.end_point || ent.endpoint || ent.end || ent.p2 || ent.v2 || ent.to;
             if (p1 && p2) {
                 vertices = [
                     { x: p1.x ?? p1[0] ?? 0, y: p1.y ?? p1[1] ?? 0, z: p1.z ?? p1[2] ?? 0 },
@@ -226,7 +232,7 @@ function normalizeWasmEntities(wasmEntities) {
 
         // Vị trí điểm chèn / Tâm
         let position = null;
-        const pos = ent.position || ent.center || ent.insertionPoint || ent.location;
+        const pos = ent.position || ent.center || ent.insertionpoint || ent.location;
         if (pos) {
             position = {
                 x: pos.x ?? pos[0] ?? 0,
