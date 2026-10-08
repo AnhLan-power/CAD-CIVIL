@@ -166,10 +166,6 @@ document.getElementById('fileInput').addEventListener('change', async function(e
                 const result = window.parse_dwg_bytes(bytes);
                 console.log("Kết quả phân tích DWG qua Wasm:", result);
 
-                if (cmdLine) {
-                    cmdLine.innerText = `Command: Đọc xong DWG! Tìm thấy ${result.entities_count || 0} thực thể.`;
-                }
-
                 if (result && result.entities) {
                     const normalizedEntities = normalizeWasmEntities(result.entities);
                     renderOptimized2D({ entities: normalizedEntities }, file.name);
@@ -201,15 +197,16 @@ function normalizeWasmEntities(wasmEntities) {
         const layer = ent.layer || ent.layer_name || '0';
         let vertices = [];
 
-        // 1. Trường hợp có đỉnh dạng mảng
-        if (Array.isArray(ent.vertices) && ent.vertices.length > 0) {
-            vertices = ent.vertices.map(v => ({
+        // 1. Tìm các tập hợp điểm (vertices / points / path)
+        const rawPts = ent.vertices || ent.points || ent.path;
+        if (Array.isArray(rawPts) && rawPts.length > 0) {
+            vertices = rawPts.map(v => ({
                 x: v.x ?? v[0] ?? 0,
                 y: v.y ?? v[1] ?? 0,
                 z: v.z ?? v[2] ?? 0
             }));
         } 
-        // 2. Trường hợp Line có điểm đầu - điểm cuối
+        // 2. Điểm đầu và điểm cuối
         else if (ent.start_point || ent.start || ent.p1) {
             const p1 = ent.start_point || ent.start || ent.p1;
             const p2 = ent.end_point || ent.end || ent.p2;
@@ -220,7 +217,7 @@ function normalizeWasmEntities(wasmEntities) {
                 ];
             }
         } 
-        // 3. Trường hợp x1, y1, x2, y2
+        // 3. Tọa độ phẳng x1, y1, x2, y2
         else if (ent.x1 !== undefined && ent.y1 !== undefined) {
             vertices = [
                 { x: ent.x1, y: ent.y1, z: ent.z1 ?? 0 },
@@ -228,13 +225,14 @@ function normalizeWasmEntities(wasmEntities) {
             ];
         }
 
-        // Tọa độ chèn Text / Insert
+        // Tọa độ vị trí chèn
         let position = null;
-        if (ent.position) {
+        if (ent.position || ent.center) {
+            const pos = ent.position || ent.center;
             position = {
-                x: ent.position.x ?? ent.position[0] ?? 0,
-                y: ent.position.y ?? ent.position[1] ?? 0,
-                z: ent.position.z ?? ent.position[2] ?? 0
+                x: pos.x ?? pos[0] ?? 0,
+                y: pos.y ?? pos[1] ?? 0,
+                z: pos.z ?? pos[2] ?? 0
             };
         } else if (ent.x !== undefined && ent.y !== undefined) {
             position = { x: ent.x, y: ent.y, z: ent.z ?? 0 };
@@ -245,6 +243,7 @@ function normalizeWasmEntities(wasmEntities) {
             layer: layer,
             vertices: vertices,
             position: position,
+            radius: ent.radius || ent.r || 0,
             text: ent.text || ent.string_value || ent.value || ''
         };
     });
@@ -267,33 +266,6 @@ function renderOptimized2D(dxf, filename) {
     if (typeof textOverlay !== 'undefined' && textOverlay) textOverlay.innerHTML = '';
     textElements = [];
 
-    let allPoints = [];
-
-    // Thu thập điểm để tính trung tâm thực của bản vẽ
-    const collectPoints = (list) => {
-        if (!list) return;
-        list.forEach(ent => {
-            if (ent.vertices) {
-                ent.vertices.forEach(v => {
-                    if (v.x !== undefined && v.y !== undefined) allPoints.push(new THREE.Vector3(v.x, v.y, v.z || 0));
-                });
-            }
-            if (ent.position && ent.position.x !== undefined) {
-                allPoints.push(new THREE.Vector3(ent.position.x, ent.position.y, ent.position.z || 0));
-            }
-        });
-    };
-
-    collectPoints(dxf.entities);
-    if (dxf.blocks) {
-        for (let b in dxf.blocks) collectPoints(dxf.blocks[b].entities);
-    }
-
-    if (allPoints.length === 0) {
-        alert("Không tìm thấy dữ liệu tọa độ.");
-        return;
-    }
-
     // 1. Xử lý vẽ các đoạn tuyến đường, GIỮ NGUYÊN TỌA ĐỘ GỐC
     const layerBuffers = new Map();
     const pushSeg = (layerName, p1, p2) => {
@@ -304,17 +276,27 @@ function renderOptimized2D(dxf, filename) {
     if (dxf.entities) {
         dxf.entities.forEach(entity => {
             const layerName = entity.layer || '0';
-            if (entity.type === 'LINE' && entity.vertices && entity.vertices.length >= 2) {
-                const p1 = new THREE.Vector3(entity.vertices[0].x, entity.vertices[0].y, entity.vertices[0].z || 0);
-                const p2 = new THREE.Vector3(entity.vertices[1].x, entity.vertices[1].y, entity.vertices[1].z || 0);
-                pushSeg(layerName, p1, p2);
-            } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') {
-                if (entity.vertices) {
-                    for (let i = 0; i < entity.vertices.length - 1; i++) {
-                        const p1 = new THREE.Vector3(entity.vertices[i].x, entity.vertices[i].y, entity.vertices[i].z || 0);
-                        const p2 = new THREE.Vector3(entity.vertices[i+1].x, entity.vertices[i+1].y, entity.vertices[i+1].z || 0);
-                        pushSeg(layerName, p1, p2);
-                    }
+            const verts = entity.vertices;
+
+            // Xử lý tất cả thực thể có từ 2 đỉnh trở lên
+            if (verts && verts.length >= 2) {
+                for (let i = 0; i < verts.length - 1; i++) {
+                    const p1 = new THREE.Vector3(verts[i].x, verts[i].y, verts[i].z || 0);
+                    const p2 = new THREE.Vector3(verts[i+1].x, verts[i+1].y, verts[i+1].z || 0);
+                    pushSeg(layerName, p1, p2);
+                }
+            } 
+            // Xử lý CIRCLE và ARC
+            else if ((entity.type === 'CIRCLE' || entity.type === 'ARC') && entity.position && entity.radius) {
+                const segs = 32;
+                const cx = entity.position.x, cy = entity.position.y, cz = entity.position.z || 0;
+                const r = entity.radius;
+                for (let i = 0; i < segs; i++) {
+                    const a1 = (i / segs) * Math.PI * 2;
+                    const a2 = ((i + 1) / segs) * Math.PI * 2;
+                    const p1 = new THREE.Vector3(cx + r * Math.cos(a1), cy + r * Math.sin(a1), cz);
+                    const p2 = new THREE.Vector3(cx + r * Math.cos(a2), cy + r * Math.sin(a2), cz);
+                    pushSeg(layerName, p1, p2);
                 }
             }
         });
@@ -342,7 +324,7 @@ function renderOptimized2D(dxf, filename) {
     });
     renderLayersPanel();
 
-    // Thêm Group vào scene mà KHÔNG dịch chuyển vị trí (Giữ nguyên tọa độ thực)
+    // Thêm Group vào scene mà KHÔNG dịch chuyển vị trí
     scene.add(group);
     currentModel = group;
 
@@ -351,7 +333,7 @@ function renderOptimized2D(dxf, filename) {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
 
-    // 2. BỘ TRÍCH XUẤT TEXT SÂU (Giữ nguyên tọa độ thực)
+    // 2. BỘ TRÍCH XUẤT TEXT SÂU
     importedElevationPoints = [];
     const parseTextEntity = (ent) => {
         let textVal = ent.text || ent.string || ent.value;
@@ -396,7 +378,7 @@ function renderOptimized2D(dxf, filename) {
         }
     }
 
-    // Đưa Camera hướng thẳng vào trung tâm của bản vẽ (dựa trên tọa độ thực)
+    // Đưa Camera hướng thẳng vào trung tâm bản vẽ
     resetCameraToModel(center, size);
     rebuildSnapCandidates();
 
