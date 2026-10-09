@@ -164,7 +164,6 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
             if (typeof window.parse_dwg_bytes === 'function') {
                 const result = window.parse_dwg_bytes(bytes);
-                window.lastDWGResult = result;
                 console.log("DWG Parsing raw result:", result);
 
                 if (result && result.entities) {
@@ -189,60 +188,87 @@ document.getElementById('fileInput').addEventListener('change', async function(e
     }
 });
 
-// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn
+// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF bằng đệ quy sâu
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
+
+    // Hàm đệ quy tìm mảng điểm hoặc các điểm trong object bất kỳ
+    function extractPoints(obj, depth = 0) {
+        if (!obj || depth > 4) return [];
+        let pts = [];
+
+        // Nếu là mảng
+        if (Array.isArray(obj)) {
+            if (obj.length > 0) {
+                // Mảng các số [x, y, z, x, y, z]
+                if (typeof obj[0] === 'number') {
+                    for (let i = 0; i < obj.length; i += 2) {
+                        pts.push({ x: obj[i] || 0, y: obj[i + 1] || 0, z: obj[i + 2] || 0 });
+                    }
+                    return pts;
+                }
+                // Mảng các object điểm [{x, y}, {x, y}]
+                if (typeof obj[0] === 'object' && obj[0] !== null) {
+                    return obj.map(p => ({
+                        x: Number(p.x ?? p.X ?? p[0]) || 0,
+                        y: Number(p.y ?? p.Y ?? p[1]) || 0,
+                        z: Number(p.z ?? p.Z ?? p[2]) || 0
+                    }));
+                }
+            }
+            return [];
+        }
+
+        // Nếu là Object, quét các thuộc tính bên trong
+        if (typeof obj === 'object') {
+            for (let key in obj) {
+                const lower = key.toLowerCase();
+                const val = obj[key];
+
+                if (lower.includes('vert') || lower.includes('point') || lower.includes('path') || lower.includes('coord')) {
+                    const res = extractPoints(val, depth + 1);
+                    if (res.length > 0) return res;
+                }
+            }
+
+            // Kiểm tra cặp điểm Start/End hoặc P1/P2
+            const p1 = obj.start || obj.start_point || obj.p1 || obj.v1;
+            const p2 = obj.end || obj.end_point || obj.p2 || obj.v2;
+            if (p1 && p2) {
+                pts.push({
+                    x: Number(p1.x ?? p1.X ?? p1[0]) || 0,
+                    y: Number(p1.y ?? p1.Y ?? p1[1]) || 0,
+                    z: Number(p1.z ?? p1.Z ?? p1[2]) || 0
+                });
+                pts.push({
+                    x: Number(p2.x ?? p2.X ?? p2[0]) || 0,
+                    y: Number(p2.y ?? p2.Y ?? p2[1]) || 0,
+                    z: Number(p2.z ?? p2.Z ?? p2[2]) || 0
+                });
+                return pts;
+            }
+
+            // Quét tiếp các sub-object
+            for (let key in obj) {
+                if (typeof obj[key] === 'object' && obj[key] !== null) {
+                    const res = extractPoints(obj[key], depth + 1);
+                    if (res.length > 0) return res;
+                }
+            }
+        }
+        return pts;
+    }
 
     return wasmEntities.map(rawEnt => {
         if (!rawEnt) return { type: 'LINE', layer: '0', vertices: [] };
 
-        const ent = {};
-        for (let k in rawEnt) {
-            ent[k.toLowerCase()] = rawEnt[k];
-        }
+        const type = String(rawEnt.type || rawEnt.entity_type || rawEnt.kind || 'LINE').toUpperCase();
+        const layer = String(rawEnt.layer || rawEnt.layer_name || rawEnt.Layer || '0');
+        const vertices = extractPoints(rawEnt);
 
-        const type = String(ent.type || ent.entity_type || ent.kind || 'LINE').toUpperCase();
-        const layer = String(ent.layer || ent.layer_name || '0');
-        let vertices = [];
-
-        // Trích xuất các tập hợp tọa độ
-        const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates || ent.pts;
-        if (Array.isArray(rawPts) && rawPts.length > 0) {
-            vertices = rawPts.map(v => {
-                if (Array.isArray(v)) {
-                    return { x: Number(v[0]) || 0, y: Number(v[1]) || 0, z: Number(v[2]) || 0 };
-                } else if (typeof v === 'object' && v !== null) {
-                    return { x: Number(v.x ?? v.X) || 0, y: Number(v.y ?? v.Y) || 0, z: Number(v.z ?? v.Z) || 0 };
-                }
-                return { x: 0, y: 0, z: 0 };
-            });
-        } else {
-            const p1 = ent.start_point || ent.startpoint || ent.start || ent.p1 || ent.v1 || ent.from;
-            const p2 = ent.end_point || ent.endpoint || ent.end || ent.p2 || ent.v2 || ent.to;
-            if (p1 && p2) {
-                vertices = [
-                    { x: Number(p1.x ?? p1.X ?? p1[0]) || 0, y: Number(p1.y ?? p1.Y ?? p1[1]) || 0, z: Number(p1.z ?? p1.Z ?? p1[2]) || 0 },
-                    { x: Number(p2.x ?? p2.X ?? p2[0]) || 0, y: Number(p2.y ?? p2.Y ?? p2[1]) || 0, z: Number(p2.z ?? p2.Z ?? p2[2]) || 0 }
-                ];
-            } else if (ent.x1 !== undefined && ent.y1 !== undefined) {
-                vertices = [
-                    { x: Number(ent.x1) || 0, y: Number(ent.y1) || 0, z: Number(ent.z1) || 0 },
-                    { x: Number(ent.x2 ?? ent.x1) || 0, y: Number(ent.y2 ?? ent.y1) || 0, z: Number(ent.z2) || 0 }
-                ];
-            }
-        }
-
-        // Vị trí điểm chèn / Tâm
         let position = null;
-        const pos = ent.position || ent.center || ent.insertionpoint || ent.location;
-        if (pos) {
-            position = {
-                x: Number(pos.x ?? pos.X ?? pos[0]) || 0,
-                y: Number(pos.y ?? pos.Y ?? pos[1]) || 0,
-                z: Number(pos.z ?? pos.Z ?? pos[2]) || 0
-            };
-        } else if (ent.x !== undefined && ent.y !== undefined) {
-            position = { x: Number(ent.x) || 0, y: Number(ent.y) || 0, z: Number(ent.z) || 0 };
+        if (vertices.length > 0) {
+            position = vertices[0];
         }
 
         return {
@@ -250,8 +276,8 @@ function normalizeWasmEntities(wasmEntities) {
             layer: layer,
             vertices: vertices,
             position: position,
-            radius: Number(ent.radius || ent.r) || 0,
-            text: ent.text || ent.string_value || ent.value || ent.contents || ''
+            radius: Number(rawEnt.radius || rawEnt.r) || 0,
+            text: rawEnt.text || rawEnt.string_value || rawEnt.value || rawEnt.contents || ''
         };
     });
 }
