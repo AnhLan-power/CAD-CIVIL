@@ -157,7 +157,6 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
     if (isDWG) {
         try {
-            // Nếu Wasm chưa sẵn sàng, đợi tối đa 5 giây cho Wasm khởi tạo xong
             if (typeof window.parse_dwg_bytes !== 'function') {
                 if (cmdLine) cmdLine.innerText = `Command: Đang đợi Wasm engine khởi tạo...`;
                 await new Promise((resolve, reject) => {
@@ -178,6 +177,16 @@ document.getElementById('fileInput').addEventListener('change', async function(e
             window.lastDWGResult = result;
             console.log("DWG Parsing raw result:", result);
 
+            // Bổ sung log kiểm tra các method có thể dùng trong WASM Entity
+            if (result && result.entities && result.entities.length > 0) {
+                const sample = result.entities[0];
+                console.log("SAMPLE ENTITY METHOD SCAN:", {
+                    prototypeKeys: Object.getOwnPropertyNames(Object.getPrototypeOf(sample)),
+                    ownKeys: Object.keys(sample),
+                    jsonMethod: typeof sample.to_json === 'function' ? sample.to_json() : null
+                });
+            }
+
             if (result && result.entities) {
                 const normalizedEntities = normalizeWasmEntities(result.entities);
                 renderOptimized2D({ entities: normalizedEntities }, file.name);
@@ -197,96 +206,91 @@ document.getElementById('fileInput').addEventListener('change', async function(e
     }
 });
 
-// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF bằng đệ quy sâu
+// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm bằng cách quét càn toàn bộ thuộc tính & phương thức
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
-
-    // Hàm đệ quy tìm mảng điểm hoặc các điểm trong object bất kỳ
-    function extractPoints(obj, depth = 0) {
-        if (!obj || depth > 4) return [];
-        let pts = [];
-
-        // Nếu là mảng
-        if (Array.isArray(obj)) {
-            if (obj.length > 0) {
-                // Mảng các số [x, y, z, x, y, z]
-                if (typeof obj[0] === 'number') {
-                    for (let i = 0; i < obj.length; i += 2) {
-                        pts.push({ x: obj[i] || 0, y: obj[i + 1] || 0, z: obj[i + 2] || 0 });
-                    }
-                    return pts;
-                }
-                // Mảng các object điểm [{x, y}, {x, y}]
-                if (typeof obj[0] === 'object' && obj[0] !== null) {
-                    return obj.map(p => ({
-                        x: Number(p.x ?? p.X ?? p[0]) || 0,
-                        y: Number(p.y ?? p.Y ?? p[1]) || 0,
-                        z: Number(p.z ?? p.Z ?? p[2]) || 0
-                    }));
-                }
-            }
-            return [];
-        }
-
-        // Nếu là Object, quét các thuộc tính bên trong
-        if (typeof obj === 'object') {
-            for (let key in obj) {
-                const lower = key.toLowerCase();
-                const val = obj[key];
-
-                if (lower.includes('vert') || lower.includes('point') || lower.includes('path') || lower.includes('coord')) {
-                    const res = extractPoints(val, depth + 1);
-                    if (res.length > 0) return res;
-                }
-            }
-
-            // Kiểm tra cặp điểm Start/End hoặc P1/P2
-            const p1 = obj.start || obj.start_point || obj.p1 || obj.v1;
-            const p2 = obj.end || obj.end_point || obj.p2 || obj.v2;
-            if (p1 && p2) {
-                pts.push({
-                    x: Number(p1.x ?? p1.X ?? p1[0]) || 0,
-                    y: Number(p1.y ?? p1.Y ?? p1[1]) || 0,
-                    z: Number(p1.z ?? p1.Z ?? p1[2]) || 0
-                });
-                pts.push({
-                    x: Number(p2.x ?? p2.X ?? p2[0]) || 0,
-                    y: Number(p2.y ?? p2.Y ?? p2[1]) || 0,
-                    z: Number(p2.z ?? p2.Z ?? p2[2]) || 0
-                });
-                return pts;
-            }
-
-            // Quét tiếp các sub-object
-            for (let key in obj) {
-                if (typeof obj[key] === 'object' && obj[key] !== null) {
-                    const res = extractPoints(obj[key], depth + 1);
-                    if (res.length > 0) return res;
-                }
-            }
-        }
-        return pts;
-    }
 
     return wasmEntities.map(rawEnt => {
         if (!rawEnt) return { type: 'LINE', layer: '0', vertices: [] };
 
-        const type = String(rawEnt.type || rawEnt.entity_type || rawEnt.kind || 'LINE').toUpperCase();
-        const layer = String(rawEnt.layer || rawEnt.layer_name || rawEnt.Layer || '0');
-        const vertices = extractPoints(rawEnt);
-
-        let position = null;
-        if (vertices.length > 0) {
-            position = vertices[0];
+        // 1. Thử gọi hàm export JSON nếu WASM hỗ trợ
+        let entObj = rawEnt;
+        if (typeof rawEnt.to_json === 'function') {
+            try { entObj = JSON.parse(rawEnt.to_json()); } catch(e) {}
+        } else if (typeof rawEnt.toJSON === 'function') {
+            try { entObj = rawEnt.toJSON(); } catch(e) {}
         }
+
+        const type = String(entObj.type || entObj.entity_type || entObj.kind || rawEnt.entity_type || 'LINE').toUpperCase();
+        const layer = String(entObj.layer || entObj.layer_name || entObj.Layer || rawEnt.layer || '0');
+        
+        let vertices = [];
+
+        // 2. Thu thập điểm từ mọi nguồn có thể
+        function extractFrom(target) {
+            if (!target) return [];
+            let pts = [];
+
+            // Nếu là mảng
+            if (Array.isArray(target)) {
+                if (target.length > 0) {
+                    if (typeof target[0] === 'number') {
+                        for (let i = 0; i < target.length; i += 2) {
+                            pts.push({ x: target[i] || 0, y: target[i + 1] || 0, z: target[i + 2] || 0 });
+                        }
+                    } else if (typeof target[0] === 'object') {
+                        pts = target.map(p => ({
+                            x: Number(p.x ?? p.X ?? p[0]) || 0,
+                            y: Number(p.y ?? p.Y ?? p[1]) || 0,
+                            z: Number(p.z ?? p.Z ?? p[2]) || 0
+                        }));
+                    }
+                }
+                return pts;
+            }
+
+            // Nếu là object có start / end
+            if (typeof target === 'object') {
+                const p1 = target.start || target.start_point || target.p1 || target.v1;
+                const p2 = target.end || target.end_point || target.p2 || target.v2;
+                if (p1 && p2) {
+                    pts.push({ x: Number(p1.x ?? p1.X ?? p1[0]) || 0, y: Number(p1.y ?? p1.Y ?? p1[1]) || 0, z: Number(p1.z ?? p1.Z ?? p1[2]) || 0 });
+                    pts.push({ x: Number(p2.x ?? p2.X ?? p2[0]) || 0, y: Number(p2.y ?? p2.Y ?? p2[1]) || 0, z: Number(p2.z ?? p2.Z ?? p2[2]) || 0 });
+                    return pts;
+                }
+            }
+            return pts;
+        }
+
+        // Quét lần lượt các biến phổ biến
+        const fieldsToTry = ['vertices', 'points', 'path', 'coordinates', 'pts', 'geometry', 'data', 'shape'];
+        for (let field of fieldsToTry) {
+            let val = entObj[field] ?? rawEnt[field];
+            if (typeof val === 'function') {
+                try { val = val.call(rawEnt); } catch(e) {}
+            }
+            const found = extractFrom(val);
+            if (found.length > 0) {
+                vertices = found;
+                break;
+            }
+        }
+
+        // Trường hợp không tìm thấy trong mảng, quét trực tiếp start/end của entObj/rawEnt
+        if (vertices.length === 0) {
+            vertices = extractFrom(entObj);
+            if (vertices.length === 0) vertices = extractFrom(rawEnt);
+        }
+
+        let position = vertices.length > 0 ? vertices[0] : null;
 
         return {
             type: type,
             layer: layer,
             vertices: vertices,
             position: position,
-            radius: Number(rawEnt.radius || rawEnt.r) || 0,
-            text: rawEnt.text || rawEnt.string_value || rawEnt.value || rawEnt.contents || ''
+            radius: Number(entObj.radius || entObj.r || rawEnt.radius) || 0,
+            text: entObj.text || entObj.string_value || entObj.value || rawEnt.text || ''
         };
     });
 }
