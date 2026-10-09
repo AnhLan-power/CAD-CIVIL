@@ -450,9 +450,12 @@
     async function initDwgWasmEngine() {
         try {
             await initWasm();
-            // Gán hàm Wasm ra phạm vi global để 03-layers-panel.js gọi được
             window.parse_dwg_bytes = parse_dwg_bytes; 
+            window.isWasmReady = true;
             console.log("DWG Wasm Module loaded successfully!");
+            
+            // Bắn sự kiện báo tin cho các file JS khác biết Wasm đã sẵn sàng
+            window.dispatchEvent(new CustomEvent('wasm-ready'));
         } catch (err) {
             console.warn("Chưa thể khởi tạo Wasm DWG Engine:", err);
         }
