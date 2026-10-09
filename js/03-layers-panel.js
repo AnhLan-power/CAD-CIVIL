@@ -174,18 +174,7 @@ document.getElementById('fileInput').addEventListener('change', async function(e
             const bytes = new Uint8Array(buffer);
 
             const result = window.parse_dwg_bytes(bytes);
-            window.lastDWGResult = result;
             console.log("DWG Parsing raw result:", result);
-
-            // Bổ sung log kiểm tra các method có thể dùng trong WASM Entity
-            if (result && result.entities && result.entities.length > 0) {
-                const sample = result.entities[0];
-                console.log("SAMPLE ENTITY METHOD SCAN:", {
-                    prototypeKeys: Object.getOwnPropertyNames(Object.getPrototypeOf(sample)),
-                    ownKeys: Object.keys(sample),
-                    jsonMethod: typeof sample.to_json === 'function' ? sample.to_json() : null
-                });
-            }
 
             if (result && result.entities) {
                 const normalizedEntities = normalizeWasmEntities(result.entities);
@@ -206,91 +195,92 @@ document.getElementById('fileInput').addEventListener('change', async function(e
     }
 });
 
-// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm bằng cách quét càn toàn bộ thuộc tính & phương thức
+// Hàm hỗ trợ chuẩn hóa thực thể từ WASM bằng cách gọi phương thức Getter trực tiếp
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
+
+    // Hàm an toàn để lấy giá trị (từ property hoặc function call)
+    function safeGet(obj, prop) {
+        if (!obj) return undefined;
+        try {
+            if (typeof obj[prop] === 'function') {
+                return obj[prop]();
+            }
+            return obj[prop];
+        } catch (e) {
+            return undefined;
+        }
+    }
 
     return wasmEntities.map(rawEnt => {
         if (!rawEnt) return { type: 'LINE', layer: '0', vertices: [] };
 
-        // 1. Thử gọi hàm export JSON nếu WASM hỗ trợ
-        let entObj = rawEnt;
-        if (typeof rawEnt.to_json === 'function') {
-            try { entObj = JSON.parse(rawEnt.to_json()); } catch(e) {}
-        } else if (typeof rawEnt.toJSON === 'function') {
-            try { entObj = rawEnt.toJSON(); } catch(e) {}
-        }
+        const type = String(safeGet(rawEnt, 'entity_type') || safeGet(rawEnt, 'type') || 'LINE').toUpperCase();
+        const layer = String(safeGet(rawEnt, 'layer') || safeGet(rawEnt, 'layer_name') || '0');
 
-        const type = String(entObj.type || entObj.entity_type || entObj.kind || rawEnt.entity_type || 'LINE').toUpperCase();
-        const layer = String(entObj.layer || entObj.layer_name || entObj.Layer || rawEnt.layer || '0');
-        
         let vertices = [];
 
-        // 2. Thu thập điểm từ mọi nguồn có thể
-        function extractFrom(target) {
-            if (!target) return [];
-            let pts = [];
-
-            // Nếu là mảng
-            if (Array.isArray(target)) {
-                if (target.length > 0) {
-                    if (typeof target[0] === 'number') {
-                        for (let i = 0; i < target.length; i += 2) {
-                            pts.push({ x: target[i] || 0, y: target[i + 1] || 0, z: target[i + 2] || 0 });
-                        }
-                    } else if (typeof target[0] === 'object') {
-                        pts = target.map(p => ({
-                            x: Number(p.x ?? p.X ?? p[0]) || 0,
-                            y: Number(p.y ?? p.Y ?? p[1]) || 0,
-                            z: Number(p.z ?? p.Z ?? p[2]) || 0
-                        }));
+        // 1. Thử lấy vertices / points từ các getter function
+        const possiblePtKeys = ['vertices', 'get_vertices', 'points', 'get_points', 'path', 'coordinates'];
+        for (let key of possiblePtKeys) {
+            const val = safeGet(rawEnt, key);
+            if (Array.isArray(val) && val.length > 0) {
+                vertices = val.map(v => {
+                    if (Array.isArray(v)) {
+                        return { x: Number(v[0]) || 0, y: Number(v[1]) || 0, z: Number(v[2]) || 0 };
+                    } else if (typeof v === 'object' && v !== null) {
+                        return {
+                            x: Number(safeGet(v, 'x') ?? safeGet(v, 'X') ?? 0),
+                            y: Number(safeGet(v, 'y') ?? safeGet(v, 'Y') ?? 0),
+                            z: Number(safeGet(v, 'z') ?? safeGet(v, 'Z') ?? 0)
+                        };
                     }
-                }
-                return pts;
-            }
-
-            // Nếu là object có start / end
-            if (typeof target === 'object') {
-                const p1 = target.start || target.start_point || target.p1 || target.v1;
-                const p2 = target.end || target.end_point || target.p2 || target.v2;
-                if (p1 && p2) {
-                    pts.push({ x: Number(p1.x ?? p1.X ?? p1[0]) || 0, y: Number(p1.y ?? p1.Y ?? p1[1]) || 0, z: Number(p1.z ?? p1.Z ?? p1[2]) || 0 });
-                    pts.push({ x: Number(p2.x ?? p2.X ?? p2[0]) || 0, y: Number(p2.y ?? p2.Y ?? p2[1]) || 0, z: Number(p2.z ?? p2.Z ?? p2[2]) || 0 });
-                    return pts;
-                }
-            }
-            return pts;
-        }
-
-        // Quét lần lượt các biến phổ biến
-        const fieldsToTry = ['vertices', 'points', 'path', 'coordinates', 'pts', 'geometry', 'data', 'shape'];
-        for (let field of fieldsToTry) {
-            let val = entObj[field] ?? rawEnt[field];
-            if (typeof val === 'function') {
-                try { val = val.call(rawEnt); } catch(e) {}
-            }
-            const found = extractFrom(val);
-            if (found.length > 0) {
-                vertices = found;
+                    return { x: 0, y: 0, z: 0 };
+                });
                 break;
             }
         }
 
-        // Trường hợp không tìm thấy trong mảng, quét trực tiếp start/end của entObj/rawEnt
+        // 2. Thử lấy điểm đầu & điểm cuối (Line / Segment)
         if (vertices.length === 0) {
-            vertices = extractFrom(entObj);
-            if (vertices.length === 0) vertices = extractFrom(rawEnt);
+            const p1 = safeGet(rawEnt, 'start_point') || safeGet(rawEnt, 'start') || safeGet(rawEnt, 'p1');
+            const p2 = safeGet(rawEnt, 'end_point') || safeGet(rawEnt, 'end') || safeGet(rawEnt, 'p2');
+            if (p1 && p2) {
+                vertices = [
+                    {
+                        x: Number(safeGet(p1, 'x') ?? safeGet(p1, 'X') ?? p1[0] ?? 0),
+                        y: Number(safeGet(p1, 'y') ?? safeGet(p1, 'Y') ?? p1[1] ?? 0),
+                        z: Number(safeGet(p1, 'z') ?? safeGet(p1, 'Z') ?? p1[2] ?? 0)
+                    },
+                    {
+                        x: Number(safeGet(p2, 'x') ?? safeGet(p2, 'X') ?? p2[0] ?? 0),
+                        y: Number(safeGet(p2, 'y') ?? safeGet(p2, 'Y') ?? p2[1] ?? 0),
+                        z: Number(safeGet(p2, 'z') ?? safeGet(p2, 'Z') ?? p2[2] ?? 0)
+                    }
+                ];
+            }
         }
 
-        let position = vertices.length > 0 ? vertices[0] : null;
+        // 3. Vị trí tâm / insertion point
+        let position = null;
+        const pos = safeGet(rawEnt, 'position') || safeGet(rawEnt, 'center') || safeGet(rawEnt, 'insertion_point');
+        if (pos) {
+            position = {
+                x: Number(safeGet(pos, 'x') ?? safeGet(pos, 'X') ?? pos[0] ?? 0),
+                y: Number(safeGet(pos, 'y') ?? safeGet(pos, 'Y') ?? pos[1] ?? 0),
+                z: Number(safeGet(pos, 'z') ?? safeGet(pos, 'Z') ?? pos[2] ?? 0)
+            };
+        } else if (vertices.length > 0) {
+            position = vertices[0];
+        }
 
         return {
             type: type,
             layer: layer,
             vertices: vertices,
             position: position,
-            radius: Number(entObj.radius || entObj.r || rawEnt.radius) || 0,
-            text: entObj.text || entObj.string_value || entObj.value || rawEnt.text || ''
+            radius: Number(safeGet(rawEnt, 'radius') || safeGet(rawEnt, 'r') || 0),
+            text: String(safeGet(rawEnt, 'text') || safeGet(rawEnt, 'value') || '')
         };
     });
 }
