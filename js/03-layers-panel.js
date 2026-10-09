@@ -164,6 +164,7 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
             if (typeof window.parse_dwg_bytes === 'function') {
                 const result = window.parse_dwg_bytes(bytes);
+                window.lastDWGResult = result;
                 console.log("DWG Parsing raw result:", result);
 
                 if (result && result.entities) {
@@ -188,79 +189,60 @@ document.getElementById('fileInput').addEventListener('change', async function(e
     }
 });
 
-// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn bằng Deep Scan
+// Hàm hỗ trợ chuẩn hóa thực thể từ Wasm sang dạng DXF tiêu chuẩn
 function normalizeWasmEntities(wasmEntities) {
     if (!Array.isArray(wasmEntities)) return [];
-
-    // Hàm lấy tất cả các thuộc tính của object kể cả trong Prototype
-    const getAllKeys = (obj) => {
-        let keys = new Set();
-        let curr = obj;
-        while (curr && curr !== Object.prototype) {
-            Object.getOwnPropertyNames(curr).forEach(k => keys.add(k));
-            curr = Object.getPrototypeOf(curr);
-        }
-        return Array.from(keys);
-    };
 
     return wasmEntities.map(rawEnt => {
         if (!rawEnt) return { type: 'LINE', layer: '0', vertices: [] };
 
-        const allKeys = getAllKeys(rawEnt);
         const ent = {};
-
-        // Copy thuộc tính và xử lý các hàm getter nếu có
-        allKeys.forEach(k => {
-            try {
-                const val = rawEnt[k];
-                ent[k.toLowerCase()] = (typeof val === 'function') ? val.call(rawEnt) : val;
-            } catch (e) {}
-        });
+        for (let k in rawEnt) {
+            ent[k.toLowerCase()] = rawEnt[k];
+        }
 
         const type = String(ent.type || ent.entity_type || ent.kind || 'LINE').toUpperCase();
         const layer = String(ent.layer || ent.layer_name || '0');
         let vertices = [];
 
-        // 1. Quét mảng đỉnh
+        // Trích xuất các tập hợp tọa độ
         const rawPts = ent.vertices || ent.points || ent.path || ent.coordinates || ent.pts;
         if (Array.isArray(rawPts) && rawPts.length > 0) {
             vertices = rawPts.map(v => {
                 if (Array.isArray(v)) {
-                    return { x: v[0] || 0, y: v[1] || 0, z: v[2] || 0 };
+                    return { x: Number(v[0]) || 0, y: Number(v[1]) || 0, z: Number(v[2]) || 0 };
                 } else if (typeof v === 'object' && v !== null) {
-                    return { x: v.x ?? v.X ?? 0, y: v.y ?? v.Y ?? 0, z: v.z ?? v.Z ?? 0 };
+                    return { x: Number(v.x ?? v.X) || 0, y: Number(v.y ?? v.Y) || 0, z: Number(v.z ?? v.Z) || 0 };
                 }
                 return { x: 0, y: 0, z: 0 };
             });
-        } 
-        // 2. Quét điểm đầu/cuối (Line)
-        else {
+        } else {
             const p1 = ent.start_point || ent.startpoint || ent.start || ent.p1 || ent.v1 || ent.from;
             const p2 = ent.end_point || ent.endpoint || ent.end || ent.p2 || ent.v2 || ent.to;
             if (p1 && p2) {
                 vertices = [
-                    { x: p1.x ?? p1.X ?? p1[0] ?? 0, y: p1.y ?? p1.Y ?? p1[1] ?? 0, z: p1.z ?? p1.Z ?? p1[2] ?? 0 },
-                    { x: p2.x ?? p2.X ?? p2[0] ?? 0, y: p2.y ?? p2.Y ?? p2[1] ?? 0, z: p2.z ?? p2.Z ?? p2[2] ?? 0 }
+                    { x: Number(p1.x ?? p1.X ?? p1[0]) || 0, y: Number(p1.y ?? p1.Y ?? p1[1]) || 0, z: Number(p1.z ?? p1.Z ?? p1[2]) || 0 },
+                    { x: Number(p2.x ?? p2.X ?? p2[0]) || 0, y: Number(p2.y ?? p2.Y ?? p2[1]) || 0, z: Number(p2.z ?? p2.Z ?? p2[2]) || 0 }
                 ];
             } else if (ent.x1 !== undefined && ent.y1 !== undefined) {
                 vertices = [
-                    { x: ent.x1, y: ent.y1, z: ent.z1 ?? 0 },
-                    { x: ent.x2 ?? ent.x1, y: ent.y2 ?? ent.y1, z: ent.z2 ?? 0 }
+                    { x: Number(ent.x1) || 0, y: Number(ent.y1) || 0, z: Number(ent.z1) || 0 },
+                    { x: Number(ent.x2 ?? ent.x1) || 0, y: Number(ent.y2 ?? ent.y1) || 0, z: Number(ent.z2) || 0 }
                 ];
             }
         }
 
-        // 3. Vị trí điểm chèn / Tâm
+        // Vị trí điểm chèn / Tâm
         let position = null;
         const pos = ent.position || ent.center || ent.insertionpoint || ent.location;
         if (pos) {
             position = {
-                x: pos.x ?? pos.X ?? pos[0] ?? 0,
-                y: pos.y ?? pos.Y ?? pos[1] ?? 0,
-                z: pos.z ?? pos.Z ?? pos[2] ?? 0
+                x: Number(pos.x ?? pos.X ?? pos[0]) || 0,
+                y: Number(pos.y ?? pos.Y ?? pos[1]) || 0,
+                z: Number(pos.z ?? pos.Z ?? pos[2]) || 0
             };
         } else if (ent.x !== undefined && ent.y !== undefined) {
-            position = { x: ent.x, y: ent.y, z: ent.z ?? 0 };
+            position = { x: Number(ent.x) || 0, y: Number(ent.y) || 0, z: Number(ent.z) || 0 };
         }
 
         return {
@@ -268,7 +250,7 @@ function normalizeWasmEntities(wasmEntities) {
             layer: layer,
             vertices: vertices,
             position: position,
-            radius: ent.radius || ent.r || 0,
+            radius: Number(ent.radius || ent.r) || 0,
             text: ent.text || ent.string_value || ent.value || ent.contents || ''
         };
     });
@@ -460,11 +442,8 @@ function resetCamera() {
 function resetCameraToModel(center, size) {
     const maxDim = Math.max(size.x, size.y, 100);
     
-    // Đặt điểm tập trung (target) đúng vị trí tâm thực của bản vẽ
     controls.target.copy(center);
-
-    // Đặt camera lùi lại trên trục Z theo đúng tâm bản vẽ
-    camera.position.set(center.x, center.y - maxDim * 0.0001, center.z + maxDim * 1.2);
+    camera.position.set(center.x, center.y - maxDim * 0.0001, center.z + maxDim * 1.5);
     camera.up.set(0, 0, 1);
     
     controls.update();
