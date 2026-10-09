@@ -157,23 +157,32 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 
     if (isDWG) {
         try {
+            // Nếu Wasm chưa sẵn sàng, đợi tối đa 5 giây cho Wasm khởi tạo xong
+            if (typeof window.parse_dwg_bytes !== 'function') {
+                if (cmdLine) cmdLine.innerText = `Command: Đang đợi Wasm engine khởi tạo...`;
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => reject(new Error("Timeout: Wasm DWG parser chưa thể khởi tạo!")), 5000);
+                    window.addEventListener('wasm-ready', () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    }, { once: true });
+                });
+            }
+
             if (cmdLine) cmdLine.innerText = `Command: Parsing DWG binary file '${file.name}' with Wasm...`;
 
             const buffer = await file.arrayBuffer();
             const bytes = new Uint8Array(buffer);
 
-            if (typeof window.parse_dwg_bytes === 'function') {
-                const result = window.parse_dwg_bytes(bytes);
-                console.log("DWG Parsing raw result:", result);
+            const result = window.parse_dwg_bytes(bytes);
+            window.lastDWGResult = result;
+            console.log("DWG Parsing raw result:", result);
 
-                if (result && result.entities) {
-                    const normalizedEntities = normalizeWasmEntities(result.entities);
-                    renderOptimized2D({ entities: normalizedEntities }, file.name);
-                } else {
-                    throw new Error("Không tìm thấy thực thể hợp lệ trong file DWG.");
-                }
+            if (result && result.entities) {
+                const normalizedEntities = normalizeWasmEntities(result.entities);
+                renderOptimized2D({ entities: normalizedEntities }, file.name);
             } else {
-                throw new Error("Wasm DWG parser chưa được khởi tạo!");
+                throw new Error("Không tìm thấy thực thể hợp lệ trong file DWG.");
             }
         } catch (err) {
             console.error(err);
