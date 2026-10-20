@@ -28,25 +28,42 @@
             const infoA = alignA.object.userData.alignmentInfo, infoB = alignB.object.userData.alignmentInfo;
             const { path: pathA } = buildAlignmentPath(alignA.object.userData.boundaryPts, infoA.radius);
             const { path: pathB } = buildAlignmentPath(alignB.object.userData.boundaryPts, infoB.radius);
-            for (let i = 0; i < pathA.length - 1; i++) {
-                for (let j = 0; j < pathB.length - 1; j++) {
-                    const hit = segmentIntersection2D(pathA[i], pathA[i + 1], pathB[j], pathB[j + 1]);
-                    if (!hit) continue;
-                    let stationA = 0;
-                    for (let k = 0; k < i; k++) stationA += pathA[k].distanceTo(pathA[k + 1]);
-                    stationA += pathA[i].distanceTo(pathA[i + 1]) * hit.t;
-                    let stationB = 0;
-                    for (let k = 0; k < j; k++) stationB += pathB[k].distanceTo(pathB[k + 1]);
-                    stationB += pathB[j].distanceTo(pathB[j + 1]) * hit.u;
-                    return {
-                        point: new THREE.Vector3(hit.x, hit.y, 0),
-                        stationA, stationB,
-                        dirA: pathA[i + 1].clone().sub(pathA[i]).normalize(),
-                        dirB: pathB[j + 1].clone().sub(pathB[j]).normalize()
-                    };
+
+            // offA/offB: phần kéo dài thêm ở ĐẦU mỗi tuyến (để trừ ra khi tính lý trình thật)
+            function tryFind(pA, pB, offA, offB) {
+                for (let i = 0; i < pA.length - 1; i++) {
+                    for (let j = 0; j < pB.length - 1; j++) {
+                        const hit = segmentIntersection2D(pA[i], pA[i + 1], pB[j], pB[j + 1]);
+                        if (!hit) continue;
+                        let stationA = 0;
+                        for (let k = 0; k < i; k++) stationA += pA[k].distanceTo(pA[k + 1]);
+                        stationA += pA[i].distanceTo(pA[i + 1]) * hit.t;
+                        let stationB = 0;
+                        for (let k = 0; k < j; k++) stationB += pB[k].distanceTo(pB[k + 1]);
+                        stationB += pB[j].distanceTo(pB[j + 1]) * hit.u;
+                        return {
+                            point: new THREE.Vector3(hit.x, hit.y, 0),
+                            stationA: stationA - offA, stationB: stationB - offB,
+                            dirA: pA[i + 1].clone().sub(pA[i]).normalize(),
+                            dirB: pB[j + 1].clone().sub(pB[j]).normalize()
+                        };
+                    }
                 }
+                return null;
             }
-            return null;
+
+            const direct = tryFind(pathA, pathB, 0, 0);
+            if (direct) return direct;
+
+            // Không cắt nhau trực tiếp: thử KÉO DÀI 2 đầu mỗi tuyến thêm một đoạn ngắn theo hướng tiếp
+            // tuyến — bắt được ngã ba vẽ tay (nhánh phụ dừng sát/ngay trước tuyến chính, không chạm hẳn).
+            const ext = 15;
+            const extend = p => {
+                const dS = p[0].clone().sub(p[1]).normalize();
+                const dE = p[p.length - 1].clone().sub(p[p.length - 2]).normalize();
+                return [p[0].clone().add(dS.multiplyScalar(ext)), ...p, p[p.length - 1].clone().add(dE.multiplyScalar(ext))];
+            };
+            return tryFind(extend(pathA), extend(pathB), ext, ext);
         }
 
         function lineLineIntersection(P1, d1, P2, d2) {
@@ -171,188 +188,273 @@
             return 3.5;
         }
 
+        // Các vùng cắt (theo lý trình) mà những Intersection đang có trong bản vẽ yêu cầu trên 1 Alignment —
+        // Corridor tạo MỚI (sau khi đã có Intersection) dùng hàm này để tự dừng đúng tại mép mảng giao.
+        function collectIntersectionExcludeRanges(alignmentName) {
+            const out = [];
+            entities.forEach(e => {
+                if (e.type !== 'INTERSECTION') return;
+                const info = e.object.userData.intersectionInfo;
+                const r = info && info.excludeRanges && info.excludeRanges[alignmentName];
+                if (r) out.push(r);
+            });
+            return out;
+        }
+
+        // Dải tường đứng (không khép kín) nối các điểm liên tiếp từ cao độ zBottom lên zTop — dùng vẽ
+        // mặt đứng bó vỉa dọc ranh giới lòng đường / vỉa hè trong mảng giao.
+        function buildWallStrip(pts, zBottom, zTop, color) {
+            const positions = [];
+            for (let i = 0; i < pts.length - 1; i++) {
+                const a = pts[i], b = pts[i + 1];
+                const p1 = [a.x, a.y, zBottom], p2 = [b.x, b.y, zBottom], p3 = [b.x, b.y, zTop], p4 = [a.x, a.y, zTop];
+                [p1, p2, p3, p1, p3, p4].forEach(p => positions.push(...p));
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.computeVertexNormals();
+            return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+        }
+
         function createIntersectionEntity(alignA, alignB, cornerRadius) {
             const crossing = findAlignmentsCrossing(alignA, alignB);
-            if (!crossing) return { error: 'Alignment không cắt nhau trong bản vẽ hiện tại.' };
+            if (!crossing) return { error: 'Alignment không cắt nhau (kể cả khi kéo dài đầu tuyến thêm 15m) trong bản vẽ hiện tại.' };
+            const infoA = alignA.object.userData.alignmentInfo, infoB = alignB.object.userData.alignmentInfo;
 
-            const w = getRoadEdgeWidth(currentAssembly);
+            const P = crossing.point;
+            const w = getRoadEdgeWidth(currentAssembly);        // mép NGOÀI cùng (ngoài vỉa hè)
+            const wInner = getInnerRoadWidth(currentAssembly);  // mép làn xe (trong bó vỉa)
+            const hasSidewalkBand = wInner < w - 1e-3;
+            const delta = hasSidewalkBand ? (w - wInner) : 0;
+            // Dải đỉnh bó vỉa (xám sáng) nằm giữa lòng đường và vỉa hè, y như trên Corridor
+            const _ranges = computeAssemblyTypeRanges(currentAssembly);
+            const curbW = _ranges.curb ? (_ranges.curb.outerAbs - _ranges.curb.innerAbs) : 0;
+            const wMid = wInner + curbW;                       // mép ngoài bó vỉa = mép trong vỉa hè
+            const hasCurbStrip = hasSidewalkBand && curbW > 0.02 && wMid < w - 0.02;
             const getPerp = d => new THREE.Vector3(-d.y, d.x, 0);
 
-            // Tự phát hiện NGÃ BA: nếu điểm giao nằm ngay ĐẦU hoặc CUỐI của 1 trong 2 Alignment (thay
-            // vì cắt ngang giữa tuyến), tuyến đó COI NHƯ KẾT THÚC tại đây — chỉ lấy 1 nhánh (hướng còn
-            // tiếp tục), không lấy cả 2 hướng như tuyến cắt ngang qua (ngã tư). Nhờ vậy code bên dưới
-            // dùng chung được cho cả ngã ba (3 nhánh) lẫn ngã tư (4 nhánh).
-            const infoA = alignA.object.userData.alignmentInfo, infoB = alignB.object.userData.alignmentInfo;
+            // --- Xác định các NHÁNH thật sự tồn tại tại điểm giao ---
+            // Tuyến nào bắt đầu/kết thúc ngay tại điểm giao (trong phạm vi endTol) thì chỉ có 1 nhánh
+            // (ngã ba); tuyến đi xuyên qua có 2 nhánh. Không tạo nhánh "ảo" ở phía tuyến đã kết thúc.
             const endTol = Math.max(w * 1.5, 5);
             function branchesFor(key, dir, station, totalLength) {
                 const atStart = station <= endTol, atEnd = station >= totalLength - endTol;
-                if (atStart && !atEnd) return [{ key: key + '+', dir, width: w }];
-                if (atEnd && !atStart) return [{ key: key + '-', dir: dir.clone().negate(), width: w }];
-                return [{ key: key + '+', dir, width: w }, { key: key + '-', dir: dir.clone().negate(), width: w }];
+                if (atStart && atEnd) return [];
+                if (atStart) return [{ key: key + '+', dir: dir.clone() }];
+                if (atEnd) return [{ key: key + '-', dir: dir.clone().negate() }];
+                return [{ key: key + '+', dir: dir.clone() }, { key: key + '-', dir: dir.clone().negate() }];
             }
             const rays = [
                 ...branchesFor('A', crossing.dirA, crossing.stationA, infoA.totalLength),
                 ...branchesFor('B', crossing.dirB, crossing.stationB, infoB.totalLength)
             ].sort((a, b) => Math.atan2(a.dir.y, a.dir.x) - Math.atan2(b.dir.y, b.dir.x));
-            if (rays.length < 3) return { error: 'Cả 2 Alignment đều kết thúc ngay tại điểm giao — không đủ nhánh để tạo Intersection (cần ít nhất 1 tuyến chạy xuyên qua, hoặc cả 2 tuyến cùng có 1 đoạn tiếp diễn).' };
+            const n = rays.length;
+            if (n < 3) return { error: 'Điểm giao không đủ 3 nhánh đường để tạo nút giao (cần ngã ba hoặc ngã tư).' };
 
-            // Bo góc mép NGOÀI (Vỉa hè) — với ngã ba, cặp nhánh CÙNG 1 tuyến (VD A+ và A- của tuyến
-            // chạy xuyên qua) không cần bo (đó là cạnh thẳng tự nhiên của tuyến, không có tuyến kia
-            // chắn ngang) — bỏ qua, KHÔNG báo lỗi. Chỉ báo lỗi khi 2 tuyến KHÁC NHAU gần như song song.
+            // --- Bo góc ---
+            // Cung biên NGOÀI (mép vỉa hè) và biên TRONG (mép làn xe) PHẢI ĐỒNG TÂM: bán kính ngoài nhỏ
+            // hơn trong đúng bằng bề rộng dải vỉa hè+bó vỉa (delta). Nhờ đó điểm tiếp tuyến của 2 cung trên
+            // cùng 1 nhánh nằm cùng khoảng cách dọc tuyến -> đầu mảng vỉa hè vuông góc với tuyến, khớp
+            // phẳng với mép cắt Corridor (trước đây tính độc lập với bán kính ngược chiều nên bị XÉO).
+            // cornerRadius = bán kính bo tại mép làn xe (bó vỉa), đúng cách gọi thông thường.
+            const rOut = Math.max(cornerRadius - delta, 0.5);
             const maxTangentDist = Math.min(cornerRadius * 3 + w * 2, 25);
-            function buildFillets(width, radius) {
-                const list = [];
-                for (let i = 0; i < rays.length; i++) {
-                    const r1 = rays[i], r2 = rays[(i + 1) % rays.length];
-                    const sameAlignment = r1.key[0] === r2.key[0];
-                    const offsetVec1 = getPerp(r1.dir).multiplyScalar(width);
-                    const offsetVec2 = getPerp(r2.dir).multiplyScalar(-width);
-                    const fillet = computeQuadrantFillet(crossing.point, r1.dir, offsetVec1, r2.dir, offsetVec2, radius, maxTangentDist);
-                    if (!fillet) {
-                        if (sameAlignment) continue; // cạnh thẳng tự nhiên (ngã ba) -> bỏ qua, không lỗi
-                        return { error: 'Không bo góc được — 2 tuyến gần như song song/thẳng hàng tại điểm giao, hoặc bán kính bo góc quá lớn so với bề rộng đường.' };
+            let anyClamped = false;
+            const slots = []; // slots[i] = góc bo giữa rays[i] và rays[i+1], hoặc null nếu cùng 1 tuyến (phía "đường thẳng")
+            for (let i = 0; i < n; i++) {
+                const r1 = rays[i], r2 = rays[(i + 1) % n];
+                if (r1.key[0] === r2.key[0]) { slots.push(null); continue; }
+                const off1 = getPerp(r1.dir).multiplyScalar(w);
+                const off2 = getPerp(r2.dir).multiplyScalar(-w);
+                const outer = computeQuadrantFillet(P, r1.dir, off1, r2.dir, off2, rOut, maxTangentDist);
+                if (!outer) return { error: 'Không bo góc được — 2 tuyến gần như song song/thẳng hàng tại điểm giao.' };
+                if (outer.clamped) anyClamped = true;
+                // Dịch cung ngoài vào phía tim đường 1 đoạn shift (đồng tâm với cung ngoài)
+                const deriveShift = shift => {
+                    if (outer.isChamfer) {
+                        const p1 = outer.arcPts[0].clone().sub(getPerp(r1.dir).multiplyScalar(shift));
+                        const p2 = outer.arcPts[outer.arcPts.length - 1].clone().add(getPerp(r2.dir).multiplyScalar(shift));
+                        return { arcPts: [p1, p2], isChamfer: true };
                     }
-                    list.push({ ...fillet, r1, r2 });
+                    const c = outer.center;
+                    return { arcPts: outer.arcPts.map(p => { const v = p.clone().sub(c); const len = v.length() || 1; return c.clone().add(v.multiplyScalar((len + shift) / len)); }) };
+                };
+                const inner = hasSidewalkBand ? deriveShift(delta) : outer;
+                const mid = hasCurbStrip ? deriveShift(w - wMid) : null;
+                slots.push({ r1, r2, outer, mid, inner });
+            }
+
+            // --- Khoảng cách dọc tuyến D của "cửa" mỗi nhánh (tính từ tim giao P) ---
+            // Mảng giao kết thúc đúng tại D (cạnh cửa VUÔNG GÓC tuyến) và Corridor bị cắt đúng tại D.
+            const D = {};
+            slots.forEach(s => {
+                if (!s) return;
+                s.a1 = s.outer.arcPts[0].clone().sub(P).dot(s.r1.dir);
+                s.a2 = s.outer.arcPts[s.outer.arcPts.length - 1].clone().sub(P).dot(s.r2.dir);
+                D[s.r1.key] = Math.max(D[s.r1.key] || 0, s.a1);
+                D[s.r2.key] = Math.max(D[s.r2.key] || 0, s.a2);
+            });
+            rays.forEach(r => { if (!D[r.key]) D[r.key] = w; });
+            // Ngã ba vẽ tay: nhánh phụ có thể dừng CÁCH tuyến chính 1 đoạn nhỏ (điểm giao tìm được nhờ
+            // kéo dài đầu tuyến). Khi đó phải kéo cửa nhánh tới đúng điểm bắt đầu thật của nhánh phụ,
+            // để mảng giao nối liền vào Corridor nhánh phụ, không để lại khe hở.
+            rays.forEach(r => {
+                const st = r.key[0] === 'A' ? crossing.stationA : crossing.stationB;
+                const total = r.key[0] === 'A' ? infoA.totalLength : infoB.totalLength;
+                const gap = r.key.endsWith('+') ? Math.max(0, -st) : Math.max(0, st - total);
+                if (gap > D[r.key]) D[r.key] = gap;
+            });
+
+            function slotPoints(s, variant) {
+                const arc = s[variant].arcPts;
+                const out = [];
+                const ext1 = D[s.r1.key] - s.a1, ext2 = D[s.r2.key] - s.a2;
+                if (ext1 > 1e-3) out.push(arc[0].clone().add(s.r1.dir.clone().multiplyScalar(ext1)));
+                arc.forEach(p => out.push(p.clone()));
+                if (ext2 > 1e-3) out.push(arc[arc.length - 1].clone().add(s.r2.dir.clone().multiplyScalar(ext2)));
+                return out;
+            }
+            // Phía "đường thẳng" của ngã ba (2 nhánh cùng 1 tuyến kề nhau, không có đường nhánh ở giữa):
+            // biên chạy dọc MÉP ĐỐI DIỆN của tuyến chính, nối 2 cửa — nhờ đó dải đường chính giữa vùng
+            // cắt được lấp đủ (trước đây thiếu dải này nên "đường đi qua ngã 3 bị mất").
+            function farPoints(i, width) {
+                const ri = rays[i], rj = rays[(i + 1) % n];
+                return [
+                    P.clone().add(getPerp(ri.dir).multiplyScalar(width)).add(ri.dir.clone().multiplyScalar(D[ri.key])),
+                    P.clone().sub(getPerp(rj.dir).multiplyScalar(width)).add(rj.dir.clone().multiplyScalar(D[rj.key]))
+                ];
+            }
+            function buildLoop(variant, width) {
+                const pts = [];
+                for (let i = 0; i < n; i++) {
+                    if (slots[i]) pts.push(...slotPoints(slots[i], variant));
+                    else pts.push(...farPoints(i, width));
                 }
-                return { list };
+                return pts;
             }
 
-            const outerRes = buildFillets(w, cornerRadius);
-            if (outerRes.error) return { error: outerRes.error };
-            const fillets = outerRes.list;
-            let anyClamped = fillets.some(f => f.clamped);
-
-            // Khoảng cách tiếp tuyến (tangentDist) lớn nhất theo từng hướng — dùng để biết Corridor
-            // cần "cắt" (bỏ dựng hình) từ điểm giao ra xa bao nhiêu mét mỗi phía, sao cho vùng cắt đủ
-            // rộng để chứa TRỌN cả 2 cung bo góc liền kề hướng đó (mỗi hướng có thể chạm 2 cung khác nhau).
-            const maxTangentByKey = { 'A+': 0, 'A-': 0, 'B+': 0, 'B-': 0 };
-            fillets.forEach(f => {
-                maxTangentByKey[f.r1.key] = Math.max(maxTangentByKey[f.r1.key], f.tangentDist);
-                maxTangentByKey[f.r2.key] = Math.max(maxTangentByKey[f.r2.key], f.tangentDist);
-            });
-
-            // Bo góc lần 2 theo mép TRONG (lòng đường xe chạy, trong Bó vỉa) — dùng bán kính bo NHỎ
-            // HƠN theo đúng tỉ lệ (bo góc lòng đường luôn nhỏ hơn bo góc mép ngoài cùng 1 khoảng =
-            // hiệu 2 bề rộng), để tạo biên trong cho vùng "lòng đường". Vỉa hè (viền giữa biên trong
-            // và biên ngoài) CHỈ dựng ở đúng từng góc bo (dạng "múi"), KHÔNG kéo dài dọc theo đoạn
-            // thẳng nối 2 góc bo liền kề — đoạn thẳng đó là phần vỉa hè của CHÍNH Corridor (đã cắt lùi
-            // đúng tới đây), Intersection không vẽ chồng lên để tránh 2 lớp vỉa hè chồng nhau.
-            const wInner = getInnerRoadWidth(currentAssembly);
-            const innerRadius = Math.max(cornerRadius - (w - wInner), 0.5);
-            const hasInnerRing = wInner < w - 1e-3;
-            let innerFillets = [];
-            if (hasInnerRing) {
-                const innerRes = buildFillets(wInner, innerRadius);
-                if (!innerRes.error) innerFillets = innerRes.list;
-            }
-            // Ghép mỗi góc bo NGOÀI với đúng góc bo TRONG cùng cặp nhánh (r1.key+r2.key) để dựng "múi"
-            // vỉa hè riêng cho từng góc — không dùng chỉ số mảng (index) vì số lượng góc bo ngoài/trong
-            // có thể lệch nhau nếu 1 trong 2 lần bo gặp trường hợp góc quá xiên phải bỏ qua.
-            const cornerPairs = fillets.map(fOuter => {
-                const fInner = innerFillets.find(fi => fi.r1.key === fOuter.r1.key && fi.r2.key === fOuter.r2.key);
-                return { outer: fOuter, inner: fInner || null };
-            });
-
-            // Cao độ "làm phẳng" cả vùng giao — lấy theo tuyến ƯU TIÊN (tuyến click đầu tiên: alignA)
-            const { path: pathA } = buildAlignmentPath(alignA.object.userData.boundaryPts, infoA.radius);
-            const { stations: stationsA } = computeStations(pathA, 5, 0);
+            // --- Cao độ ---
             const { path: baselineA, source } = findBaselineProfileForAlignment(alignA, 5);
             const realElevAtCrossing = interpolateAlongProfilePath(baselineA, crossing.stationA);
             const dispElev = elevationToDisplayZ(realElevAtCrossing !== null ? realElevAtCrossing : 0);
+            const offs = computeCrossSectionOffsets(currentAssembly);
+            const outermost = type => offs.filter(p => p.type === type && p.offset > 0).sort((a, b) => b.offset - a.offset)[0];
+            const laneEdgeDelta = outermost('lane') ? outermost('lane').elevDelta : 0;
+            const sidewalkDelta = outermost('sidewalk') ? outermost('sidewalk').elevDelta : laneEdgeDelta;
+            const zLane = dispElev + laneEdgeDelta * 0.5;               // mặt lòng đường (phẳng, ~giữa vồng/dốc ngang)
+            const zSidewalk = hasSidewalkBand ? dispElev + sidewalkDelta : zLane; // mặt vỉa hè (cao hơn lòng đường bằng chiều cao bó vỉa)
 
-            // Phạm vi lý trình cần "cắt" trên mỗi tuyến — cộng thêm 1 chút dư (0.3m) để mép Corridor
-            // nằm gọn KHUẤT dưới mảng Intersection, không hở khe do sai số làm tròn. Với nhánh KHÔNG
-            // tồn tại (tuyến kết thúc tại đây — ngã ba), maxTangentByKey giữ nguyên 0, exclude range
-            // thu về đúng 1 phía (không cắt "quá" đầu/cuối tuyến vốn đã không có gì ở đó).
-            const marginExtra = 0.3;
-            const excludeRangeA = [crossing.stationA - maxTangentByKey['A-'] - marginExtra, crossing.stationA + maxTangentByKey['A+'] + marginExtra];
-            const excludeRangeB = [crossing.stationB - maxTangentByKey['B-'] - marginExtra, crossing.stationB + maxTangentByKey['B+'] + marginExtra];
+            // --- Vùng cắt Corridor: đúng bằng D mỗi phía của mỗi tuyến ---
+            const rangeFor = (k, station) => [Math.max(0, station - (D[k + '-'] || 0)), station + (D[k + '+'] || 0)];
+            const excludeRangeA = rangeFor('A', crossing.stationA);
+            const excludeRangeB = rangeFor('B', crossing.stationB);
 
             const group = new THREE.Group();
             group.userData.isIntersection = true;
-
-            // Đường biên vùng giao (mép ngoài) = nối liên tiếp các cung bo góc theo đúng thứ tự nhánh
-            // (giữa 2 cung liền kề tự động là đoạn thẳng — phần mép đường thẳng chưa bị bo, hoặc cạnh
-            // thẳng tự nhiên phía sau ở ngã ba — không cần vẽ riêng, tự nối do các điểm liền nhau).
-            const boundary = [];
-            fillets.forEach(f => boundary.push(...f.arcPts));
-            const boundaryFlat = boundary.map(p => new THREE.Vector3(p.x, p.y, dispElev));
-
-            // Biên trong (lòng đường xe chạy) — dùng để tô Làn xe + dựng kết cấu áo đường
-            const innerBoundary = [];
-            cornerPairs.forEach(({ inner }) => { if (inner) innerBoundary.push(...inner.arcPts); });
-            const innerBoundaryFlat = innerBoundary.map(p => new THREE.Vector3(p.x, p.y, dispElev));
-            const drivableBoundaryFlat = innerBoundaryFlat.length >= 3 ? innerBoundaryFlat : boundaryFlat;
-
-            // Vỉa hè: mỗi góc bo dựng RIÊNG 1 "múi" (mặt cắt hình quạt giữa cung ngoài và cung trong
-            // của ĐÚNG góc đó, khép kín bằng 2 đoạn thẳng nối 2 đầu tương ứng) — không nối liền các múi
-            // với nhau, để không lan ra đoạn thẳng giữa 2 góc.
+            const toFlat = (pts, z) => pts.map(p => new THREE.Vector3(p.x, p.y, z));
+            const laneColor = ASSEMBLY_TYPE_COLORS.lane || 0x555560;
             const sidewalkColor = ASSEMBLY_TYPE_COLORS.sidewalk || 0x9a6b3a;
-            cornerPairs.forEach(({ outer, inner }) => {
-                if (!inner) return; // góc này không tách được biên trong (VD bo góc trong bị lỗi) -> bỏ qua, không vẽ vỉa hè ở đây
-                const wedgePts2D = [
-                    ...outer.arcPts.map(p => new THREE.Vector2(p.x, p.y)),
-                    ...inner.arcPts.slice().reverse().map(p => new THREE.Vector2(p.x, p.y))
-                ];
-                const wedgeShape = new THREE.Shape(wedgePts2D);
-                const wedgeGeo = new THREE.ShapeGeometry(wedgeShape);
-                wedgeGeo.translate(0, 0, dispElev);
-                const wedgeMesh = new THREE.Mesh(wedgeGeo, new THREE.MeshBasicMaterial({ color: sidewalkColor, side: THREE.DoubleSide }));
-                wedgeMesh.userData.isIntersectionMesh = true;
-                group.add(wedgeMesh);
-            });
-            if (innerBoundaryFlat.length >= 3) {
-                group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(innerBoundaryFlat), new THREE.LineBasicMaterial({ color: 0xffffff })));
-            }
+            const curbColor = ASSEMBLY_TYPE_COLORS.curb || 0xcccccc;
 
-            // Mặt lòng đường (Làn xe)
-            const fillMat = new THREE.MeshBasicMaterial({ color: ASSEMBLY_TYPE_COLORS.lane || 0x555560, side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
-            const shape = new THREE.Shape(drivableBoundaryFlat.map(p => new THREE.Vector2(p.x, p.y)));
-            const geo = new THREE.ShapeGeometry(shape);
-            // ShapeGeometry dựng trên mặt phẳng XY tại z=0 -> dịch lên đúng cao độ đã tính
-            geo.translate(0, 0, dispElev);
-            const mesh = new THREE.Mesh(geo, fillMat);
-            mesh.userData.isIntersectionMesh = true;
-            group.add(mesh);
+            const outerLoop = buildLoop('outer', w);
+            const innerLoop = hasSidewalkBand ? buildLoop('inner', wInner) : outerLoop;
+            const outerFlat = toFlat(outerLoop, hasSidewalkBand ? zSidewalk : zLane);
+            const innerFlat = toFlat(innerLoop, zLane);
 
-            // Viền ngoài cùng + nhãn
-            const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(boundaryFlat), new THREE.LineBasicMaterial({ color: 0xffffff }));
-            group.add(outline);
-            const labelH = Math.max(cornerRadius * 0.35, 0.3);
-            group.add(createTextSprite(
-                `Intersection: ${alignA.object.userData.alignmentInfo.name} x ${alignB.object.userData.alignmentInfo.name}`,
-                crossing.point.clone().setZ(dispElev + labelH * 2), labelH
-            ));
-
-            // Kết cấu áo đường cho phần LÒNG ĐƯỜNG — lấy đúng các lớp khai báo phạm vi "Làn xe" (BTXM,
-            // CPĐD...) trong Assembly Editor. Vỉa hè bao quanh góc bo (nếu có) hiện chỉ tô màu phẳng,
-            // chưa có kết cấu riêng theo lớp (dải vỉa hè mỏng, ít ảnh hưởng hình dạng tổng thể).
-            let cumThickness = 0;
-            pavementLayers.filter(l => l.appliesTo === 'lane' && l.unit === 'area').forEach(layer => {
-                const color = layer.color !== undefined ? layer.color : 0x888888;
-                group.add(buildFlatLayerVolume(drivableBoundaryFlat, dispElev - cumThickness, layer.thickness, color));
-                cumThickness += layer.thickness;
-            });
-
-            group.userData.boundaryPts = boundaryFlat;
-            group.userData.intersectionInfo = {
-                alignmentA: alignA.object.userData.alignmentInfo.name,
-                alignmentB: alignB.object.userData.alignmentInfo.name,
-                cornerRadius, roadEdgeWidth: w,
-                flattenElevSource: source,
-                anyClamped
+            const addFill = (pts, z, color, transparent) => {
+                const geo = new THREE.ShapeGeometry(new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y))));
+                geo.translate(0, 0, z);
+                const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: !!transparent, opacity: transparent ? 0.95 : 1 }));
+                mesh.userData.isIntersectionMesh = true;
+                group.add(mesh);
             };
 
-            // Tự tìm Corridor ĐÃ CÓ SẴN của 2 tuyến này (nếu có) và rebuild lại với vùng cắt vừa tính,
-            // để Corridor dừng lại đúng tại biên vùng giao thay vì chạy xuyên qua — đây là chỗ khiến
-            // Intersection trước đây trông "rời rạc", không liền mạch với Corridor.
+            // Mặt lòng đường (Làn xe) — gồm cả dải đường chính giữa vùng cắt ở ngã ba
+            addFill(innerFlat, zLane, laneColor, true);
+
+            // Vỉa hè: từng mảnh ở mỗi góc bo (giữa cung ngoài và cung trong) + dải vỉa hè phía "đường
+            // thẳng" của ngã ba. Mỗi mảnh có đầu vuông góc tuyến, khớp phẳng với vỉa hè Corridor.
+            const sidewalkPolys = [], curbPolys = [];
+            if (hasSidewalkBand) {
+                const swVariant = hasCurbStrip ? 'mid' : 'inner';       // vỉa hè = từ cung ngoài tới cung mid (hoặc inner nếu không có bó vỉa riêng)
+                const swWidth = hasCurbStrip ? wMid : wInner;
+                for (let i = 0; i < n; i++) {
+                    if (slots[i]) {
+                        const o = slotPoints(slots[i], 'outer'), m = slotPoints(slots[i], swVariant).reverse();
+                        sidewalkPolys.push([...o, ...m]);
+                        if (hasCurbStrip) curbPolys.push([...slotPoints(slots[i], 'mid'), ...slotPoints(slots[i], 'inner').reverse()]);
+                    } else {
+                        const fo = farPoints(i, w), fm = farPoints(i, swWidth);
+                        sidewalkPolys.push([fo[0], fo[1], fm[1], fm[0]]);
+                        if (hasCurbStrip) { const fi = farPoints(i, wInner); curbPolys.push([fm[0], fm[1], fi[1], fi[0]]); }
+                    }
+                }
+                curbPolys.forEach(poly => addFill(poly, zSidewalk, curbColor, false));
+                sidewalkPolys.forEach(poly => addFill(poly, zSidewalk, sidewalkColor, false));
+
+                // Mặt đứng bó vỉa dọc ranh giới lòng đường / vỉa hè
+                if (zSidewalk - zLane > 0.005) {
+                        for (let i = 0; i < n; i++) {
+                        if (slots[i]) {
+                            group.add(buildWallStrip(slotPoints(slots[i], 'inner'), zLane, zSidewalk, curbColor));
+                        } else {
+                            group.add(buildWallStrip(farPoints(i, wInner), zLane, zSidewalk, curbColor));
+                        }
+                    }
+                }
+            }
+
+            // Viền + nhãn
+            group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outerFlat), new THREE.LineBasicMaterial({ color: 0xffffff })));
+            if (hasSidewalkBand) group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(innerFlat), new THREE.LineBasicMaterial({ color: 0xcccccc })));
+            const labelH = Math.max(cornerRadius * 0.35, 0.3);
+            group.add(createTextSprite(
+                `Intersection: ${infoA.name} x ${infoB.name}`,
+                P.clone().setZ(zLane + labelH * 2), labelH
+            ));
+
+            // --- Kết cấu ---
+            // Lòng đường: các lớp phạm vi "Làn xe" (BTXM, CPĐD...). Vỉa hè: các lớp phạm vi "Vỉa hè"
+            // (gạch lát, lớp lót...) — dựng cho TỪNG mảnh vỉa hè, khớp kết cấu với đường đi tới.
+            let cumLane = 0;
+            pavementLayers.filter(l => l.appliesTo === 'lane' && l.unit === 'area').forEach(layer => {
+                const color = layer.color !== undefined ? layer.color : 0x888888;
+                group.add(buildFlatLayerVolume(innerFlat, zLane - cumLane, layer.thickness, color));
+                cumLane += layer.thickness;
+            });
+            if (hasSidewalkBand) {
+                sidewalkPolys.forEach(poly => {
+                    let cum = 0;
+                    pavementLayers.filter(l => l.appliesTo === 'sidewalk' && l.unit === 'area').forEach(layer => {
+                        const color = layer.color !== undefined ? layer.color : 0x888888;
+                        group.add(buildFlatLayerVolume(poly, zSidewalk - cum, layer.thickness, color));
+                        cum += layer.thickness;
+                    });
+                });
+            }
+
+            group.userData.boundaryPts = outerFlat;
+            group.userData.innerBoundaryPts = innerFlat;
+            group.userData.sidewalkPolys = sidewalkPolys;
+            group.userData.curbPolys = curbPolys;
+            group.userData.intersectionInfo = {
+                alignmentA: infoA.name, alignmentB: infoB.name,
+                cornerRadius, roadEdgeWidth: w,
+                branchCount: n,
+                flattenElevSource: source,
+                anyClamped,
+                excludeRanges: { [infoA.name]: excludeRangeA, [infoB.name]: excludeRangeB }
+            };
+
+            // Tự tìm Corridor ĐÃ CÓ SẴN của 2 tuyến và rebuild với vùng cắt vừa tính, để Corridor dừng
+            // đúng tại mép mảng giao thay vì chạy xuyên qua.
             [{ entityRef: alignA, range: excludeRangeA }, { entityRef: alignB, range: excludeRangeB }].forEach(({ entityRef, range }) => {
                 const name = entityRef.object.userData.alignmentInfo.name;
                 entities.forEach(e => {
                     if (e.type !== 'CORRIDOR' || e.object.userData.corridorInfo.alignmentName !== name) return;
-                    const existingRanges = (e.object.userData.corridorInfo.excludeStationRanges || []).slice();
-                    existingRanges.push(range);
-                    const rebuilt = createCorridorEntity(entityRef, currentAssembly, e.object.userData.corridorInfo.interval || 10, e.object.userData.corridorInfo.taluyRatio || defaultTaluyRatio, existingRanges);
+                    const merged = (e.object.userData.corridorInfo.excludeStationRanges || []).filter(r => Math.abs(r[0] - range[0]) > 0.01 || Math.abs(r[1] - range[1]) > 0.01);
+                    merged.push(range);
+                    const rebuilt = createCorridorEntity(entityRef, currentAssembly, e.object.userData.corridorInfo.interval || 10, e.object.userData.corridorInfo.taluyRatio || defaultTaluyRatio, merged);
                     if (rebuilt.error) return;
                     while (e.object.children.length) e.object.remove(e.object.children[0]);
                     rebuilt.group.children.slice().forEach(child => e.object.add(child));

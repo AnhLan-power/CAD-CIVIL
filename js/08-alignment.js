@@ -131,3 +131,22 @@
             return group;
         }
 
+
+
+        // Lấy vị trí + hướng tại 1 lý trình BẤT KỲ dọc đường polyline (khác computeStations chỉ lấy theo
+        // bước cố định) — dùng để chèn cọc đúng tại biên vùng cắt Corridor ở Intersection, tránh để
+        // Corridor dừng ở cọc gần nhất (cách mép cắt tới 1 khoảng cách cọc) gây khe hở với mảng giao.
+        function sampleStationOnPath(pathPoints, s) {
+            const cum = [0];
+            for (let i = 1; i < pathPoints.length; i++) cum.push(cum[i - 1] + pathPoints[i].distanceTo(pathPoints[i - 1]));
+            const total = cum[cum.length - 1];
+            const st = Math.max(0, Math.min(total, s));
+            let idx = 0;
+            while (idx < pathPoints.length - 2 && cum[idx + 1] < st) idx++;
+            const segLen = cum[idx + 1] - cum[idx] || 1;
+            const t = (st - cum[idx]) / segLen;
+            const a = pathPoints[idx], b = pathPoints[idx + 1];
+            const pos = a.clone().lerp(b, t);
+            const dir = b.clone().sub(a).normalize();
+            return { station: st, pos, dir };
+        }

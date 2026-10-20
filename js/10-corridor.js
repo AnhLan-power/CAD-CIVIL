@@ -104,9 +104,23 @@
             const info = alignmentEntity.object.userData.alignmentInfo;
             const piPoints = alignmentEntity.object.userData.boundaryPts;
             const { path } = buildAlignmentPath(piPoints, info.radius);
-            const { stations } = computeStations(path, interval, 0);
+            let { stations } = computeStations(path, interval, 0);
             const { path: baseline, source } = findBaselineProfileForAlignment(alignmentEntity, interval);
             if (baseline.length < 2) return { error: 'Không tìm được dữ liệu cao độ (cần có Surface hoặc Profile FG cho Alignment này).' };
+
+            // Vùng cắt tại các Intersection: nếu không truyền vào (VD tạo Corridor MỚI sau khi đã có
+            // Intersection) thì tự lấy từ các Intersection đang có trong bản vẽ.
+            const ranges = (excludeStationRanges !== undefined) ? excludeStationRanges : collectIntersectionExcludeRanges(info.name);
+            // Chèn thêm cọc ĐÚNG tại 2 biên mỗi vùng cắt, để Corridor dừng chính xác tại mép mảng giao
+            // (không dừng ở cọc gần nhất, vốn có thể cách mép cắt tới 1 khoảng cách cọc -> hở khe).
+            if (ranges.length) {
+                const extra = [];
+                ranges.forEach(r => [r[0], r[1]].forEach(sv => {
+                    if (sv > 1e-6 && sv < info.totalLength - 1e-6) extra.push(sampleStationOnPath(path, sv));
+                }));
+                stations = stations.concat(extra).sort((a, b) => a.station - b.station)
+                    .filter((st, i, arr) => i === 0 || st.station - arr[i - 1].station > 1e-4);
+            }
 
             const crossSectionOffsets = computeCrossSectionOffsets(assembly);
             if (crossSectionOffsets.length < 2) return { error: 'Assembly chưa có thành phần nào.' };
@@ -122,9 +136,8 @@
             // Các cọc rơi vào phạm vi 1 Intersection (nếu có) — dùng để "cắt" Corridor dừng lại đúng
             // tại biên vùng giao, thay vì chạy xuyên qua Intersection (xem excludeStationRanges, được
             // tự tính khi tạo Intersection và lưu lại trong corridorInfo để rebuild vẫn giữ đúng chỗ cắt).
-            const ranges = excludeStationRanges || [];
-            const stationInGap = stations.map(st => ranges.some(r => st.station >= r[0] && st.station <= r[1]));
-            const skipConnection = i => stationInGap[i] || stationInGap[i + 1];
+            // Bỏ nối 2 cọc liền kề khi cả đoạn [cọc i, cọc i+1] nằm gọn trong 1 vùng cắt.
+            const skipConnection = i => ranges.some(r => stations[i].station >= r[0] - 1e-6 && stations[i + 1].station <= r[1] + 1e-6);
 
             const group = new THREE.Group();
             group.userData.isCorridor = true;
