@@ -86,6 +86,7 @@
                 if (i + 1 >= posAttr.count) break;
                 const a = new THREE.Vector3().fromBufferAttribute(posAttr, i).applyMatrix4(obj.matrixWorld);
                 const b = new THREE.Vector3().fromBufferAttribute(posAttr, i + 1).applyMatrix4(obj.matrixWorld);
+                if (a.x === b.x && a.y === b.y) continue; // đoạn đã được chuyển thành đối tượng tự vẽ (thu về độ dài 0)
                 list.push(a, b, a.clone().add(b).multiplyScalar(0.5));
             }
         }
@@ -96,6 +97,7 @@
             for (let i = 0; i + 1 < posAttr.count; i += 2) {
                 const a = new THREE.Vector3().fromBufferAttribute(posAttr, i).applyMatrix4(obj.matrixWorld);
                 const b = new THREE.Vector3().fromBufferAttribute(posAttr, i + 1).applyMatrix4(obj.matrixWorld);
+                if (a.x === b.x && a.y === b.y) continue;
                 list.push([a, b]);
             }
         }

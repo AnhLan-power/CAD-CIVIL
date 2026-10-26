@@ -564,6 +564,7 @@
 
                 if (match) selectEntity(entity.id, true);
             });
+            impSelectInBox(minX, minY, maxX, maxY, isWindowMode); // + đối tượng nhập từ file DXF/DWG
 
             setCommandText(`Command: ${isWindowMode ? 'Window' : 'Crossing'} — đã chọn ${selectedIds.size} đối tượng.`);
         }
@@ -732,7 +733,18 @@
 
             if (activeTool === 'select') {
                 const hit = pickEntityAt(event);
-                if (!hit) { clearSelection(); return; }
+                if (!hit) {
+                    // Không trúng đối tượng tự vẽ -> thử đối tượng nhập từ file DXF/DWG (chuyển thành đối tượng tự vẽ)
+                    const imp = impPickAt(event);
+                    const ent = imp ? impPromote(imp) : null;
+                    if (ent) {
+                        selectEntity(ent.id, event.shiftKey);
+                        setCommandText(`Command: Đã chọn ${ent.type} (lớp ${ent.layerName}, ID ${ent.id}) từ bản vẽ nhập.`);
+                        return;
+                    }
+                    clearSelection();
+                    return;
+                }
                 selectEntity(hit.id, event.shiftKey);
                 setCommandText(`Command: Đã chọn ${hit.type} (ID ${hit.id}).`);
                 return;
@@ -1163,4 +1175,5 @@
 
         // Khởi động vòng lặp render — ĐẶT Ở ĐÂY (file tải sau cùng) để đảm bảo mọi hàm animate() cần
         // dùng (VD updateTextPositions ở file 03-layers-panel.js) đã được định nghĩa đầy đủ.
-        animate();
+        // Chạy sau khi TẤT CẢ file script đã nạp xong (sự kiện load) — không phụ thuộc thứ tự nạp file
+        window.addEventListener('load', () => animate());
