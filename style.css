@@ -191,3 +191,29 @@
             font-size: 11px; z-index: 20; justify-content: space-between; padding-right: 10px; box-sizing: border-box;
         }
         #status-bar #tool-hint { opacity: 0.85; }
+
+
+/* ===================== Bảng quản lý Xref (lệnh XR) ===================== */
+.xref-panel { position: fixed; left: 270px; top: 130px; width: 840px; height: 400px; min-width: 520px; min-height: 240px; z-index: 40;
+    background: #232323; border: 1px solid #3c3c3c; border-radius: 3px; box-shadow: 0 6px 24px rgba(0,0,0,.6);
+    display: none; flex-direction: column; resize: both; overflow: hidden; color: #ddd; font-size: 12px; }
+.xref-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: #2d2d2d; border-bottom: 1px solid #3c3c3c; cursor: move; font-weight: bold; color: #7fffd4; user-select: none; }
+.xref-header button { background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; }
+.xref-header button:hover { color: #fff; }
+.xref-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #333; }
+.xref-toolbar button { background: #333; border: 1px solid #4a4a4a; color: #ddd; padding: 4px 9px; border-radius: 2px; cursor: pointer; font-size: 12px; }
+.xref-toolbar button:hover { background: #3d3d3d; border-color: #0098ff; }
+.xref-status { color: #ffcc55; margin-left: 6px; }
+.xref-table-wrap { flex: 1; overflow: auto; }
+.xref-table { width: 100%; border-collapse: collapse; }
+.xref-table th { position: sticky; top: 0; background: #2a2a2a; text-align: left; padding: 5px 8px; border-bottom: 1px solid #3c3c3c; font-weight: normal; color: #aaa; }
+.xref-table td { padding: 4px 8px; border-bottom: 1px solid #2c2c2c; white-space: nowrap; }
+.xref-table tr[data-name] { cursor: default; }
+.xref-table tr[data-name]:hover td { background: #2b2f33; }
+.xref-table tr.sel td { background: #0b4a7a; color: #fff; }
+.xref-path { max-width: 230px; overflow: hidden; text-overflow: ellipsis; color: #999; }
+.xref-ok { color: #4ade80; }
+.xref-bad { color: #ff7b6b; }
+.xref-hint-tag { color: #888; font-size: 11px; }
+.xref-empty { padding: 16px; color: #888; }
+.xref-details { padding: 6px 10px; border-top: 1px solid #3c3c3c; background: #262626; color: #bbb; min-height: 46px; line-height: 1.5; }

@@ -8,7 +8,7 @@ App đọc DWG **ngay trong trình duyệt**: Rust (thư viện `acadrust`) biê
 ```
 index.html
 style.css
-js/            01-… đến 14-… (như cũ) + 15-dwg-wasm.js + 16-import-model.js   ← MỚI
+js/            01-… đến 14-… (như cũ) + 15-dwg-wasm.js + 16-import-model.js + 17-xref-manager.js + 18-text-edit.js   ← MỚI
 wasm/
   dwg_bridge.wasm                                         ← MỚI (đã build sẵn, ~1,2 MB)
 dwg-bridge/    mã nguồn Rust (chỉ cần khi muốn build lại)
@@ -60,7 +60,28 @@ Lưu ý: file `.wasm` đi kèm được build trong môi trường thử nghiệ
   tự vẽ thông thường (dùng được Erase/Move/Copy/Rotate/Scale/Offset...).
 - **Báo cáo:** dòng Command và bảng Properties liệt kê loại đối tượng chưa hỗ trợ, khối không có dữ liệu (xref chưa nhúng),
   đối tượng bị bỏ qua vì nằm quá xa cụm bản vẽ chính.
-- **Chưa hỗ trợ:** tô màu HATCH, MLEADER/LEADER, ảnh nền (IMAGE), solid 3D, xref chưa được nhúng vào file.
+- **Chưa hỗ trợ:** tô màu HATCH, MLEADER/LEADER, ảnh nền (IMAGE), solid 3D; xref phải được nạp qua bảng XR (lệnh XR).
+
+## Quản lý xref — lệnh XR (`js/17-xref-manager.js`)
+
+- Gõ **X** rồi **R** (hoặc `XREF`) rồi Enter, hoặc tab **Insert → External References**, để mở bảng quản lý xref giống AutoCAD.
+- Nhận diện xref trong DWG/DXF (khối có cờ xref hoặc khối rỗng bị chèn), hiển thị: tên, trạng thái (Loaded / Not found), loại,
+  số lần chèn, đường dẫn lưu, file đã nạp; xref lồng trong xref hiển thị thụt vào.
+- Trình duyệt không đọc được đường dẫn trên máy (VD `D:\...`), nên: **Nạp từ thư mục…** (chọn cả thư mục chứa xref) hoặc
+  **Nạp file xref…** — app tự ghép theo tên file, kể cả xref lồng. **Đổi file…** gán file khác cho 1 xref.
+- **Attach…** thêm xref mới (chèn tại 0,0, tỉ lệ 1, góc 0); **Reload** đọc lại file; **Detach** gỡ xref khỏi bản vẽ.
+- Hình học xref nằm đúng vị trí chèn, lớp đặt tên `TênXref|TênLớp`. Đổi xref không làm mất khung nhìn hay các đối tượng đã sửa.
+- Bản vẽ chính không có hình (chỉ chứa xref) vẫn mở được: bảng XR tự hiện để nạp file.
+- File xref DWG được đọc bằng cùng bộ đọc WebAssembly; chưa hỗ trợ tự tìm theo đường dẫn tuyệt đối trên máy.
+
+## Chọn và sửa chữ / cao độ (`js/18-text-edit.js`)
+
+- Click / Window / Crossing chọn được cả **chữ nhập từ DXF/DWG** (TEXT, MTEXT).
+  - Chữ thường → đối tượng **TEXT** (giữ chiều cao thật, góc quay, nhiều dòng).
+  - Chữ **số khảo sát** (cao độ) → điểm khảo sát **POINT**: sửa Z, dùng cho Surface như điểm thường (không bị tính trùng).
+- **Double-click** chữ để sửa nội dung ngay tại chỗ; double-click điểm cao độ để sửa Z (Enter lưu, Esc huỷ). Có Undo/Redo.
+- Bảng **Properties** của TEXT có thêm Chiều cao chữ và Góc quay (gõ `\n` để xuống dòng).
+- Sau khi sửa cao độ, nếu đã tạo Surface thì tạo lại Surface để cập nhật.
 
 ## Giấy phép
 

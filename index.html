@@ -190,6 +190,15 @@
             </div>
         </div>
 
+        <div class="ribbon-content ribbon-panel" id="ribbon-panel-insert" style="display: none;">
+            <div class="ribbon-group" style="border-right: none;">
+                <div class="group-tools">
+                    <button class="tool-btn" id="tool-xref" onclick="runXrefCommand()" title="Quản lý tham chiếu ngoài (lệnh XR)"><span class="ic">🔗</span>External<br>References</button>
+                </div>
+                <div class="group-title">Reference</div>
+            </div>
+        </div>
+
         <!-- Panel dùng chung cho các tab chưa triển khai công cụ -->
         <div class="ribbon-content ribbon-panel" id="ribbon-panel-placeholder" style="display: none; align-items: center; justify-content: center; color: #777; font-size: 12px;">
             Các công cụ ở tab này chưa được triển khai.
@@ -460,5 +469,7 @@
     <script src="js/14-trim-and-events.js"></script>
     <script src="js/15-dwg-wasm.js"></script>
     <script src="js/16-import-model.js"></script>
+    <script src="js/17-xref-manager.js"></script>
+    <script src="js/18-text-edit.js"></script>
 </body>
 </html>
