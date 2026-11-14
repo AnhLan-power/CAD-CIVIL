@@ -291,10 +291,14 @@
                     ${propInputRow('Radius', 'prop-field-radius', radius.toFixed(4))}
                 `;
             } else if (entity.type === 'TEXT') {
-                const txt = String(entity.object.userData.text || '').replace(/"/g, '&quot;');
+                // Xuống dòng hiển thị là "\n" trong ô nhập (gõ \n để xuống dòng)
+                const txt = String(entity.object.userData.text || '').replace(/\n/g, '\\n').replace(/"/g, '&quot;');
+                const th = getTextSpriteHeight(entity.object), rotDeg = (entity.object.material.rotation || 0) * 180 / Math.PI;
                 geometryHtml = `
                     <div class="prop-section-header">Text</div>
                     ${propInputRow('Nội dung', 'prop-field-text', txt)}
+                    ${propInputRow('Chiều cao chữ', 'prop-field-text-h', th.toFixed(3))}
+                    ${propInputRow('Góc quay (độ)', 'prop-field-text-rot', rotDeg.toFixed(2))}
                 `;
             } else if (entity.type === 'CORRIDOR') {
                 const ci = entity.object.userData.corridorInfo || {};
@@ -402,8 +406,13 @@
                 const r = parseFloat(document.getElementById('prop-field-radius').value);
                 if ([cx, cy, r].every(v => !isNaN(v)) && r > 0) updateCircleGeometry(entity, cx, cy, r);
             } else if (entity.type === 'TEXT') {
-                const val = document.getElementById('prop-field-text').value;
-                if (val.trim() !== '') { updateTextSpriteContent(entity.object, val.trim()); rebuildSnapCandidates(); }
+                const val = document.getElementById('prop-field-text').value.replace(/\\n/g, '\n').trim();
+                const h = parseFloat(document.getElementById('prop-field-text-h').value.replace(',', '.'));
+                const rot = parseFloat(document.getElementById('prop-field-text-rot').value.replace(',', '.'));
+                if (val !== '') {
+                    execute(makeTextEditCommand(entity, { text: val, height: isNaN(h) ? undefined : h, rotationDeg: isNaN(rot) ? undefined : rot }));
+                    updatePropertiesPanel();
+                }
             }
         }
 
@@ -447,24 +456,42 @@
 
         // Vẽ lại canvas texture của 1 Text sprite với nội dung mới (giữ nguyên chiều cao hiển thị)
         function updateTextSpriteContent(sprite, newText) {
-            const fontPx = 64, padding = 12;
-            const canvasEl = document.createElement('canvas');
-            const ctx = canvasEl.getContext('2d');
-            ctx.font = `${fontPx}px Consolas, monospace`;
-            const metrics = ctx.measureText(newText);
-            canvasEl.width = Math.max(1, Math.ceil(metrics.width) + padding * 2);
-            canvasEl.height = fontPx + padding * 2;
-            ctx.font = `${fontPx}px Consolas, monospace`;
-            ctx.fillStyle = '#7fffd4';
-            ctx.textBaseline = 'top';
-            ctx.fillText(newText, padding, padding);
-
-            const oldHeight = sprite.scale.y;
-            sprite.material.map.dispose();
+            const img = sprite.material.map && sprite.material.map.image;
+            const per = sprite.userData.worldPerPx || (sprite.scale.y / ((img && img.height) || (TEXT_FONT_PX + TEXT_PAD_PX * 2)));
+            const canvasEl = drawTextCanvas(newText);
+            if (sprite.material.map) sprite.material.map.dispose();
             sprite.material.map = new THREE.CanvasTexture(canvasEl);
-            const aspect = canvasEl.width / canvasEl.height;
-            sprite.scale.set(oldHeight * aspect, oldHeight, 1);
+            sprite.material.needsUpdate = true;
+            sprite.scale.set(canvasEl.width * per, canvasEl.height * per, 1);
             sprite.userData.text = newText;
+            sprite.userData.worldPerPx = per;
+        }
+        // Chiều cao chữ (chữ hoa, đơn vị bản vẽ) của đối tượng TEXT — chỉnh được trong Properties
+        function getTextSpriteHeight(sprite) {
+            const img = sprite.material.map && sprite.material.map.image;
+            const per = sprite.userData.worldPerPx || (sprite.scale.y / ((img && img.height) || (TEXT_FONT_PX + TEXT_PAD_PX * 2)));
+            return per * TEXT_CAP_PX;
+        }
+        function setTextSpriteHeight(sprite, capHeight) {
+            const oldPer = sprite.userData.worldPerPx || (sprite.scale.y / (TEXT_FONT_PX + TEXT_PAD_PX * 2));
+            const per = capHeight / TEXT_CAP_PX, k = per / oldPer;
+            sprite.scale.set(sprite.scale.x * k, sprite.scale.y * k, 1);
+            sprite.userData.worldPerPx = per;
+        }
+        // Lệnh sửa chữ có Undo/Redo: text (nội dung), height (chiều cao chữ), rotationDeg (góc quay)
+        function makeTextEditCommand(entity, props) {
+            const sprite = entity.object;
+            const before = { text: sprite.userData.text, height: getTextSpriteHeight(sprite), rot: (sprite.material.rotation || 0) * 180 / Math.PI };
+            const apply = p => {
+                if (p.text !== undefined && p.text !== sprite.userData.text) updateTextSpriteContent(sprite, p.text);
+                if (p.height !== undefined && p.height > 0 && Math.abs(p.height - getTextSpriteHeight(sprite)) > 1e-9) setTextSpriteHeight(sprite, p.height);
+                if (p.rot !== undefined) sprite.material.rotation = p.rot * Math.PI / 180;
+            };
+            const after = { text: props.text, height: props.height, rot: props.rotationDeg };
+            return {
+                do() { apply(after); },
+                undo() { apply(before); }
+            };
         }
 
         // --- Chọn quét (Window / Crossing selection), giống AutoCAD ---
@@ -735,8 +762,7 @@
                 const hit = pickEntityAt(event);
                 if (!hit) {
                     // Không trúng đối tượng tự vẽ -> thử đối tượng nhập từ file DXF/DWG (chuyển thành đối tượng tự vẽ)
-                    const imp = impPickAt(event);
-                    const ent = imp ? impPromote(imp) : null;
+                    const ent = impPickAndPromote(event);
                     if (ent) {
                         selectEntity(ent.id, event.shiftKey);
                         setCommandText(`Command: Đã chọn ${ent.type} (lớp ${ent.layerName}, ID ${ent.id}) từ bản vẽ nhập.`);
@@ -1104,6 +1130,7 @@
 
             if (event.ctrlKey && event.key.toLowerCase() === 'z') { event.preventDefault(); undoAction(); return; }
             if (event.ctrlKey && event.key.toLowerCase() === 'y') { event.preventDefault(); redoAction(); return; }
+            if (typeof xrCmdKey === 'function' && activeTool === 'select' && xrCmdKey(event)) { event.preventDefault(); return; } // XR / XREF
 
             if (event.key === 'Escape') {
                 if (activeTool === 'profile-pvi') { finishProfileView(); return; }

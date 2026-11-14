@@ -32,7 +32,7 @@
         // Gộp toàn bộ điểm cao độ kèm metadata (nguồn gốc + entityId nếu là Point tự đặt) — dùng cho
         // Points Manager panel. collectAllSurveyPoints() (dùng cho Surface) chỉ cần {x,y,z} nên gọi lại hàm này.
         function collectAllSurveyPointsWithMeta() {
-            const pts = importedElevationPoints.map(p => ({ x: p.x, y: p.y, z: p.z, source: 'DXF', entityId: null }));
+            const pts = importedElevationPoints.filter(p => !p.promoted).map(p => ({ x: p.x, y: p.y, z: p.z, source: 'DXF', entityId: null }));
             entities.forEach(e => {
                 if (e.type === 'POINT' && e.object.visible && e.object.userData.pointXY) {
                     pts.push({ x: e.object.userData.pointXY.x, y: e.object.userData.pointXY.y, z: e.object.userData.elevation, source: 'Point', entityId: e.id });

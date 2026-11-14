@@ -211,7 +211,7 @@ function impScanRawEntityTypes(rawText) {
     const counts = {};
     const seg = impEntitiesSegment(rawText);
     if (!seg) return counts;
-    const re = /\n\s*0\r?\n([A-Z0-9_]+)\r?(?=\n)/g;
+    const re = /\n\s*0\r?\n([A-Z][A-Z0-9_]*)\r?(?=\n)/g;
     let m;
     while ((m = re.exec(seg)) !== null) counts[m[1]] = (counts[m[1]] || 0) + 1;
     return counts;
@@ -307,11 +307,50 @@ const IMP_SUPPORTED_TYPES = new Set(['HATCH', 'LINE', 'LWPOLYLINE', 'POLYLINE', 
 // ------------------------------------------------------------------------------------------
 // 4) Duỗi phẳng toàn bộ bản vẽ thành: items (hình học), labels (chữ), elevPts (điểm cao độ)
 // ------------------------------------------------------------------------------------------
-function impFlatten(dxf, rawText) {
+// ------------------------------------------------------------------------------------------
+// 3b) XREF (tham chiếu ngoài): sổ đăng ký trong phiên nhập bản vẽ (importSession)
+//     Khối có cờ 4 (xref) / 8 (overlay) hoặc có đường dẫn xref là tham chiếu ngoài. Hình học của xref KHÔNG
+//     nằm trong file chính — người dùng nạp file xref (DWG/DXF) qua bảng quản lý XR, nội dung được mở rộng
+//     như 1 khối (đúng ngữ nghĩa xref), lớp đặt tên "TênXref|TênLớp" giống AutoCAD.
+// ------------------------------------------------------------------------------------------
+let importSession = null;
+function impIsXrefBlock(blk) {
+    return !!blk && ((blk.type & 4) !== 0 || (blk.type & 8) !== 0 || (!!blk.xrefPath && !(blk.type & 16)));
+}
+function impNewXrefRec(name, path, kind, parent, guess) {
+    return { name, path: path || '', kind: kind || 'Attach', parent: parent || null, guess: !!guess, manual: false,
+        file: null, fileName: '', dxf: null, raw: '', loaded: false, instances: 0, error: '', scope: null };
+}
+function impEnsureXref(session, name, blk, parent, guess) {
+    let r = session.xrefs.get(name);
+    if (!r) {
+        r = impNewXrefRec(name, blk && blk.xrefPath, (blk && (blk.type & 8)) ? 'Overlay' : 'Attach', parent, guess && !impIsXrefBlock(blk));
+        session.xrefs.set(name, r);
+    }
+    return r;
+}
+function impRegisterXrefs(session, blocks, parent) {
+    Object.keys(blocks || {}).forEach(n => { if (impIsXrefBlock(blocks[n])) impEnsureXref(session, n, blocks[n], parent, false); });
+}
+function impNewSession(dxf, filename, rawText, extraNote) {
+    return { dxf, filename, rawText, extraNote, xrefs: new Map(), detached: new Set(), extraInserts: [],
+        promotedItems: new Set(), promotedLabels: new Set(), origin: null, off: null, rc: null, viewFitted: false };
+}
+
+function impFlatten(dxf, rawText, session) {
     const items = [], labels = [], elevPts = [];
     const stats = { missingBlocks: new Set(), budgetHit: false, pointZ: 0 };
-    const blocks = dxf.blocks || {};
-    const styleInfo = impScanTextStyles(rawText);
+    const xrefs = session.xrefs;
+    const mainScope = { blocks: dxf.blocks || {}, styleInfo: impScanTextStyles(rawText), prefix: '', owner: null };
+    xrefs.forEach(r => { r.instances = 0; });
+    impRegisterXrefs(session, mainScope.blocks, null);
+    const scopeOfXref = rec => {
+        if (!rec.scope) {
+            rec.scope = { blocks: (rec.dxf && rec.dxf.blocks) || {}, styleInfo: impScanTextStyles(rec.raw), prefix: rec.name + '|', owner: rec.name };
+            impRegisterXrefs(session, rec.scope.blocks, rec.name); // xref lồng trong xref
+        }
+        return rec.scope;
+    };
     const MAX_ITEMS = 3000000;
     let instanceBudget = 400000; // tổng số lần mở rộng khối (chống nổ bộ nhớ khi khối lồng nhau)
 
@@ -322,7 +361,7 @@ function impFlatten(dxf, rawText) {
     const tx = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
     const txList = (m, pts) => { const o = new Array(pts.length); for (let i = 0; i < pts.length; i += 2) { o[i] = m[0] * pts[i] + m[2] * pts[i + 1] + m[4]; o[i + 1] = m[1] * pts[i] + m[3] * pts[i + 1] + m[5]; } return o; };
 
-    const addLabel = (e, m, layer, isAttrib) => {
+    const addLabel = (e, m, layer, scope) => {
         let textVal = e.text !== undefined ? e.text : (e.string !== undefined ? e.string : e.value);
         if (textVal === undefined || textVal === null || String(textVal).trim() === '') return;
         const isM = e.type === 'MTEXT';
@@ -334,9 +373,9 @@ function impFlatten(dxf, rawText) {
         const p = tx(m, pos.x, pos.y);
         // font VNI? (theo style của chữ, hoặc mã \f trong MTEXT)
         let vni = false;
-        if (styleInfo.hasVni) {
-            const st = e.handle ? styleInfo.handleStyle.get(String(e.handle).toUpperCase()) : null;
-            const font = st ? styleInfo.styleFont.get(st.toUpperCase()) : null;
+        if (scope.styleInfo.hasVni) {
+            const st = e.handle ? scope.styleInfo.handleStyle.get(String(e.handle).toUpperCase()) : null;
+            const font = st ? scope.styleInfo.styleFont.get(st.toUpperCase()) : null;
             vni = isVniName(font) || isVniName(st);
         }
         const txt = isM ? impParseMText(textVal, vni) : (() => { const t = impSpecialCodes(String(textVal)); return vni ? vniToUnicode(t) : t; })();
@@ -354,26 +393,44 @@ function impFlatten(dxf, rawText) {
             fx = (ha === 1 || ha === 4) ? -0.5 : (ha === 2 ? -1 : 0);
             fy = va === 3 ? 0 : (va === 2 ? -0.5 : (va === 1 ? -1 : -0.85));
         }
-        labels.push({ text: clean, x: p[0], y: p[1], height: height * sc, rotation: (e.rotation || 0) + impRotOf(m), layer, fx, fy });
+        const key = layer + '|' + clean + '|' + p[0].toFixed(3) + ',' + p[1].toFixed(3);
+        const lab = { text: clean, x: p[0], y: p[1], height: height * sc, rotation: (e.rotation || 0) + impRotOf(m), layer, fx, fy, key, isElev: false };
         if (/^-?\d+([.,]\d+)?$/.test(clean)) {
             const z = parseFloat(clean.replace(',', '.'));
-            if (!isNaN(z)) elevPts.push({ x: p[0], y: p[1], z });
+            if (!isNaN(z)) { elevPts.push({ x: p[0], y: p[1], z, key }); lab.isElev = true; }
         }
+        labels.push(lab);
     };
 
-    const expandBlock = (name, m, layer, depth, ent) => {
-        const blk = blocks[name];
-        if (!blk || !blk.entities || blk.entities.length === 0) { stats.missingBlocks.add(name); return; }
+    const expandBlock = (name, m, layer, depth, scope) => {
+        const blk = scope.blocks[name];
+        let rec = xrefs.get(name);
+        if (!rec && impIsXrefBlock(blk)) rec = impEnsureXref(session, name, blk, scope.owner, false);
+        if (rec) { // tham chiếu ngoài (xref)
+            if (session.detached.has(name)) return;
+            rec.instances++;
+            if (!rec.loaded || depth > 8) return;
+            if (--instanceBudget < 0) { stats.budgetHit = true; return; }
+            walk(rec.dxf.entities || [], m, null, depth + 1, scopeOfXref(rec));
+            return;
+        }
+        if (!blk || !blk.entities || blk.entities.length === 0) {
+            // Khối rỗng/không có định nghĩa: nhiều khả năng là xref bị tách dữ liệu -> đăng ký để người dùng nạp file
+            if (name && name[0] !== '*' && !session.detached.has(name)) { const r = impEnsureXref(session, name, blk, scope.owner, true); r.instances++; }
+            else stats.missingBlocks.add(name);
+            return;
+        }
         if (depth > 8) return;
         if (--instanceBudget < 0) { stats.budgetHit = true; return; }
-        walk(blk.entities, m, layer, depth + 1);
+        walk(blk.entities, m, layer, depth + 1, scope);
     };
 
-    const walk = (list, m, parentLayer, depth) => {
+    const walk = (list, m, parentLayer, depth, scope) => {
         for (let i = 0; i < list.length; i++) {
             const e = list[i];
             let layer = e.layer || '0';
             if (layer === '0' && parentLayer) layer = parentLayer; // ByBlock: lớp "0" trong khối lấy theo lớp của INSERT
+            else if (scope.prefix) layer = scope.prefix + layer;    // lớp của xref: "TênXref|TênLớp"
             const h = e.handle !== undefined ? String(e.handle) : '';
             switch (e.type) {
                 case 'LINE':
@@ -459,10 +516,10 @@ function impFlatten(dxf, rawText) {
                 case 'TEXT':
                 case 'MTEXT':
                 case 'ATTRIB':
-                    addLabel(e, m, layer, false);
+                    addLabel(e, m, layer, scope);
                     break;
                 case 'INSERT': {
-                    const base = blocks[e.name] ? blocks[e.name].position : null;
+                    const base = scope.blocks[e.name] ? scope.blocks[e.name].position : null;
                     const cols = Math.max(1, e.columnCount || 1), rows = Math.max(1, e.rowCount || 1);
                     const cnt = Math.min(cols * rows, 10000);
                     for (let q = 0; q < cnt; q++) {
@@ -474,15 +531,15 @@ function impFlatten(dxf, rawText) {
                             const ox = (e.columnSpacing || 0) * ci, oy = (e.rowSpacing || 0) * ri;
                             mi = [mi[0], mi[1], mi[2], mi[3], mi[4] + ox * Math.cos(th) - oy * Math.sin(th), mi[5] + ox * Math.sin(th) + oy * Math.cos(th)];
                         }
-                        expandBlock(e.name, impMul(m, mi), layer, depth, e);
+                        expandBlock(e.name, impMul(m, mi), layer, depth, scope);
                         // thuộc tính của khối (VD số hiệu/cao độ điểm khảo sát)
                         const atts = e.attributes || e.attribs;
-                        if (atts) atts.forEach(a => addLabel(a, m, layer, true));
+                        if (atts) atts.forEach(a => addLabel(a, m, layer, scope));
                     }
                     break;
                 }
                 case 'DIMENSION':
-                    if (e.block) expandBlock(e.block, m, layer, depth, e);
+                    if (e.block) expandBlock(e.block, m, layer, depth, scope);
                     break;
                 default:
                     break;
@@ -490,7 +547,9 @@ function impFlatten(dxf, rawText) {
         }
     };
 
-    walk(dxf.entities || [], IMP_IDENTITY, null, 0);
+    walk(dxf.entities || [], IMP_IDENTITY, null, 0, mainScope);
+    // Xref do người dùng tự đính kèm (lệnh Attach trong bảng XR): chèn tại điểm/tỉ lệ/góc đã chọn
+    session.extraInserts.forEach(ins => expandBlock(ins.name, impInsertMatrix(ins, null), null, 0, mainScope));
     return { items, labels, elevPts, stats };
 }
 
@@ -520,9 +579,18 @@ function impRobustCenter(items, labels) {
 // ------------------------------------------------------------------------------------------
 // 6) Dựng cảnh 3D từ dữ liệu đã duỗi phẳng
 // ------------------------------------------------------------------------------------------
-let impTextVersion = 0, impLastTextKey = '';
+let impTextVersion = 0, impLastTextKey = '', impPromotedLabelCount = 0;
 
-function renderOptimized2D(dxf, filename, rawText, extraNote) {
+const impItemKey = it => it.layer + '|' + it.kind + '|' + it.handle + '|' + it.xy[0].toFixed(3) + ',' + it.xy[1].toFixed(3) + '|' + it.xy.length;
+
+/** Dựng bản vẽ nhập. opts.session: dựng LẠI phiên hiện có (sau khi đổi xref...), opts.keepView: giữ nguyên khung nhìn. */
+function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
+    opts = opts || {};
+    const rerender = !!opts.session;
+    if (rerender) { importSession = opts.session; } else { importSession = impNewSession(dxf, filename, rawText, extraNote); }
+    const session = importSession;
+    dxf = session.dxf; rawText = session.rawText; filename = session.filename; extraNote = session.extraNote;
+
     if (currentModel) scene.remove(currentModel);
     removeSurface();
     textOverlay.innerHTML = '';
@@ -531,27 +599,39 @@ function renderOptimized2D(dxf, filename, rawText, extraNote) {
     importedModel = null;
     impTextVersion++;
 
-    const flat = impFlatten(dxf, rawText);
+    const flat = impFlatten(dxf, rawText, session);
     let items = flat.items, labels = flat.labels, elevPts = flat.elevPts;
     const rawTypes = impScanRawEntityTypes(rawText);
     const hatches = impParseRawHatches(rawText);
     hatches.forEach(h => items.push({ idx: 0, kind: 'HATCH', layer: h.layer, handle: h.handle, xy: h.xy, closed: true, segStart: 0, segCount: 0, promoted: false }));
+    // Đối tượng đã được chuyển thành đối tượng tự vẽ (do người dùng chọn/sửa) thì không dựng lại từ bản vẽ nhập
+    items.forEach(it => { it.key = impItemKey(it); });
+    if (session.promotedItems.size) items = items.filter(it => !session.promotedItems.has(it.key));
+    if (session.promotedLabels.size) {
+        labels = labels.filter(l => !session.promotedLabels.has(l.key));
+        elevPts = elevPts.filter(p => !session.promotedLabels.has(p.key));
+    }
     const unsupported = Object.entries(rawTypes).filter(([t]) => !IMP_SUPPORTED_TYPES.has(t)).sort((a, b) => b[1] - a[1]);
     const unsupportedText = unsupported.slice(0, 6).map(([t, n]) => `${t} ×${n.toLocaleString()}`).join(', ');
     const missing = Array.from(flat.stats.missingBlocks);
+    const xrefList = Array.from(session.xrefs.values()).filter(r => !session.detached.has(r.name));
+    const xrefMissing = xrefList.filter(r => !r.loaded);
 
-    const rc = impRobustCenter(items, labels);
+    // Rerender: giữ nguyên tâm/bán kính đã chọn ở lần dựng đầu (để các đối tượng đã chuyển sang tự vẽ không bị lệch vị trí)
+    const rc = session.rc ? { x: session.rc.x, y: session.rc.y, radius: Math.max(session.rc.radius, 300000) } : impRobustCenter(items, labels);
     const infoPanel = document.getElementById('prop-content');
     if (!rc) {
-        const why = `Không dựng được hình nào từ "${filename}".` +
+        const why = `Bản vẽ "${filename}" không có hình nào để hiển thị.` +
+            (xrefList.length ? ` Có ${xrefList.length} tham chiếu ngoài (xref) chưa nạp file — gõ XR để mở bảng quản lý xref và nạp file.` : '') +
             (unsupportedText ? ` Bản vẽ chứa các loại chưa hỗ trợ: ${unsupportedText}.` : '') +
-            (missing.length ? ` Có ${missing.length} khối chèn không có dữ liệu (thường là tham chiếu ngoài/xref chưa nhúng): ${missing.slice(0, 3).join(', ')}.` : '');
+            (missing.length ? ` Có ${missing.length} khối không có dữ liệu: ${missing.slice(0, 3).join(', ')}.` : '');
         document.getElementById('command-line').innerText = 'Command: ' + why;
         infoPanel.innerHTML = `<b>Bản vẽ:</b> ${filename}<br>${why}`;
         console.warn(why, rawTypes);
-        alert(why);
+        if (xrefList.length && typeof xrefOpenPanel === 'function') xrefOpenPanel(); else alert(why);
         return null;
     }
+    session.rc = rc;
 
     // Loại đối tượng "rác" nằm quá xa cụm hình học chính (VD lạc ở gốc toạ độ)
     const R = rc.radius;
@@ -565,7 +645,8 @@ function renderOptimized2D(dxf, filename, rawText, extraNote) {
     elevPts = elevPts.filter(p => Math.hypot(p.x - rc.x, p.y - rc.y) <= R);
 
     // Toạ độ trong bộ đệm lưu theo gốc "origin" (gần tâm) để tránh mất độ chính xác float32 với toạ độ lớn
-    const origin = { x: Math.round(rc.x), y: Math.round(rc.y) };
+    const origin = session.origin || { x: Math.round(rc.x), y: Math.round(rc.y) };
+    session.origin = origin;
     const layerBuffers = new Map();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const grow = (x, y) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
@@ -614,11 +695,15 @@ function renderOptimized2D(dxf, filename, rawText, extraNote) {
 
     const cxRel = (minX + maxX) / 2, cyRel = (minY + maxY) / 2;
     const size = new THREE.Vector3(maxX - minX, maxY - minY, 0);
-    group.position.set(-cxRel, -cyRel, 0);
+    // Gốc của cảnh (toạ độ bản vẽ tuyệt đối): lần dựng đầu = tâm hộp bao; các lần dựng lại GIỮ NGUYÊN để các đối tượng
+    // tự vẽ/đã chuyển đổi (lưu theo toạ độ cảnh) không bị lệch so với bản vẽ nhập.
+    const firstBuild = !session.off;
+    const off = session.off || { x: origin.x + cxRel, y: origin.y + cyRel };
+    session.off = off;
+    group.position.set(origin.x - off.x, origin.y - off.y, 0);
     scene.add(group);
     currentModel = group;
-    const off = { x: origin.x + cxRel, y: origin.y + cyRel }; // tâm tuyệt đối (toạ độ bản vẽ) -> gốc của cảnh
-    importedModel = { items, group, layerObjs, origin, off };
+    importedModel = { items, group, layerObjs, origin, off, session };
 
     // Chữ: nhãn DOM, kích thước theo chiều cao chữ thật (xem updateTextPositions)
     const MAX_LABELS = 40000;
@@ -629,18 +714,24 @@ function renderOptimized2D(dxf, filename, rawText, extraNote) {
         if (l.text.indexOf('\n') !== -1) { div.style.whiteSpace = 'pre'; div.style.lineHeight = '1.15'; }
         div.style.display = 'none';
         textOverlay.appendChild(div);
-        textElements.push({ element: div, position: new THREE.Vector3(l.x - off.x, l.y - off.y, 0), height: l.height, rotation: l.rotation, fx: l.fx, fy: l.fy, layer: l.layer });
+        textElements.push({ element: div, position: new THREE.Vector3(l.x - off.x, l.y - off.y, 0), height: l.height, rotation: l.rotation, fx: l.fx, fy: l.fy, layer: l.layer, text: l.text, key: l.key, isElev: l.isElev, elevRef: null, promoted: false });
     });
-    importedElevationPoints = elevPts.map(p => ({ x: p.x - off.x, y: p.y - off.y, z: p.z }));
+    importedElevationPoints = elevPts.map(p => ({ x: p.x - off.x, y: p.y - off.y, z: p.z, key: p.key }));
+    {   // nhãn chữ số được dùng làm điểm cao độ -> liên kết với điểm tương ứng (để sửa cao độ trực tiếp)
+        const byKey = new Map();
+        importedElevationPoints.forEach(pt => byKey.set(pt.key, pt));
+        textElements.forEach(t => { if (t.isElev) t.elevRef = byKey.get(t.key) || null; });
+    }
 
-    resetCameraToModel(size);
+    if (firstBuild && !session.viewFitted) { resetCameraToModel(size); session.viewFitted = true; } // chỉ canh khung ở lần dựng ĐẦU có hình
     rebuildSnapCandidates();
 
     const notes = [];
     if (unsupportedText) notes.push(`chưa hỗ trợ hiển thị: ${unsupportedText}`);
-    if (missing.length) notes.push(`${missing.length} khối không có dữ liệu (xref chưa nhúng?)`);
+    if (missing.length) notes.push(`${missing.length} khối không có dữ liệu`);
     if (dropped) notes.push(`bỏ qua ${dropped.toLocaleString()} đối tượng nằm quá xa`);
     if (labels.length > MAX_LABELS) notes.push(`chỉ hiển thị ${MAX_LABELS.toLocaleString()}/${labels.length.toLocaleString()} nhãn chữ`);
+    if (xrefList.length) notes.push(`${xrefList.length} xref (${xrefMissing.length} chưa nạp file) — gõ XR để quản lý`);
     if (flat.stats.budgetHit) notes.push('bản vẽ quá lớn, đã dừng mở rộng khối ở mức giới hạn');
     if (notes.length) console.warn('Ghi chú khi nhập bản vẽ:', notes.join('; '), rawTypes);
 
@@ -670,7 +761,7 @@ function updateTextPositions() {
     let hiddenLayers = '';
     layers.forEach((l, name) => { if (!l.visible) hiddenLayers += name + ','; });
     const key = camera.matrixWorldInverse.elements.join(',') + '|' + camera.projectionMatrix.elements[0] + '|' +
-        camera.projectionMatrix.elements[5] + '|' + W + 'x' + H + '|' + n + '|' + impTextVersion + '|' + hiddenLayers;
+        camera.projectionMatrix.elements[5] + '|' + W + 'x' + H + '|' + n + '|' + impTextVersion + '|' + hiddenLayers + '|' + impPromotedLabelCount;
     if (key === impLastTextKey) return; // camera không đổi -> khỏi tính lại
     impLastTextKey = key;
 
@@ -688,7 +779,7 @@ function updateTextPositions() {
     for (let i = 0; i < n; i++) {
         const t = textElements[i], el = t.element;
         v.copy(t.position).project(camera);
-        let show = v.z < 1 && v.x > -1.1 && v.x < 1.1 && v.y > -1.1 && v.y < 1.1;
+        let show = !t.promoted && v.z < 1 && v.x > -1.1 && v.x < 1.1 && v.y > -1.1 && v.y < 1.1;
         if (show && hiddenLayers && t.layer && hiddenLayers.indexOf(t.layer + ',') !== -1) show = false; // lớp chứa chữ đang tắt
         let fs = 11, ang = 0;
         if (show && t.height) {
@@ -781,6 +872,7 @@ function impPromote(item) {
         ls.geometry.attributes.position.needsUpdate = true;
     }
     item.promoted = true; item.promotedId = ent.id;
+    if (importedModel.session) importedModel.session.promotedItems.add(item.key);
     return ent;
 }
 
@@ -828,6 +920,89 @@ function impSelectInBox(minX, minY, maxX, maxY, windowMode) {
             if (ent) { selectEntity(ent.id, true); picked++; }
         }
     }
+    // Nhãn chữ (đang hiện trên màn hình) nằm trong / chạm khung chọn
+    for (let k = 0; k < textElements.length && picked < MAX; k++) {
+        const t = textElements[k];
+        if (t.promoted || t._vis !== true) continue;
+        const layer = layers.get(t.layer);
+        if (layer && (!layer.visible || layer.locked)) continue;
+        const r = t.element.getBoundingClientRect();
+        const inside = r.left >= minX && r.right <= maxX && r.top >= minY && r.bottom <= maxY;
+        const touch = r.right >= minX && r.left <= maxX && r.bottom >= minY && r.top <= maxY;
+        if (windowMode ? inside : touch) {
+            const ent = impPromoteLabel(t);
+            if (ent) { selectEntity(ent.id, true); picked++; }
+        }
+    }
     if (picked >= MAX) setCommandText(`Command: Đã chọn tối đa ${MAX.toLocaleString()} đối tượng từ bản vẽ nhập — hãy thu hẹp vùng chọn nếu cần thêm.`);
     return picked;
+}
+
+
+// ------------------------------------------------------------------------------------------
+// 9) Chọn CHỮ nhập từ file: nhãn chữ -> đối tượng TEXT (sprite), hoặc điểm cao độ POINT nếu là chữ số khảo sát
+// ------------------------------------------------------------------------------------------
+function impEnsureLayer(name) {
+    let layer = layers.get(name);
+    if (!layer) {
+        layer = { name, color: 0x00e5ff, visible: true, locked: false, importObject3D: null };
+        layers.set(name, layer);
+        renderLayersPanel();
+    }
+    return layer;
+}
+
+/** Nhãn chữ (đang hiện) nằm dưới con trỏ; nhiều nhãn chồng nhau thì lấy nhãn nhỏ nhất. */
+function impPickLabelAt(clientX, clientY, tolPx) {
+    tolPx = tolPx === undefined ? 3 : tolPx;
+    let best = null, bestArea = Infinity;
+    for (let i = 0; i < textElements.length; i++) {
+        const t = textElements[i];
+        if (t.promoted || t._vis !== true) continue;
+        const layer = layers.get(t.layer);
+        if (layer && (!layer.visible || layer.locked)) continue;
+        const r = t.element.getBoundingClientRect();
+        if (clientX >= r.left - tolPx && clientX <= r.right + tolPx && clientY >= r.top - tolPx && clientY <= r.bottom + tolPx) {
+            const a = r.width * r.height;
+            if (a < bestArea) { bestArea = a; best = t; }
+        }
+    }
+    return best;
+}
+
+function impPromoteLabel(t) {
+    if (t.promoted) return t.entityId ? entities.get(t.entityId) : null;
+    impEnsureLayer(t.layer);
+    let ent = null;
+    if (t.elevRef) {
+        // Chữ số khảo sát (cao độ) -> điểm khảo sát POINT: sửa Z trong Properties, dùng cho Surface như điểm thường
+        const grp = createPointEntity(t.position.clone(), t.elevRef.z);
+        makeAddCommand('POINT', grp, t.layer).do();
+        ent = entities.get(grp.userData.entityId);
+        t.elevRef.promoted = true; // không tính trùng điểm này từ danh sách điểm nhập
+    } else {
+        const spriteH = t.height * 1.9; // chiều cao sprite (gồm lề) ~1.9 lần chiều cao chữ hoa
+        const sprite = createTextSprite(t.text, new THREE.Vector3(0, 0, 0), spriteH);
+        const w = sprite.scale.x, h = sprite.scale.y, rot = (t.rotation || 0) * Math.PI / 180;
+        const ox = (0.5 + t.fx) * w, oy = -(0.5 + t.fy) * h; // đổi từ điểm neo của nhãn sang tâm sprite
+        sprite.position.set(t.position.x + ox * Math.cos(rot) - oy * Math.sin(rot), t.position.y + ox * Math.sin(rot) + oy * Math.cos(rot), 0);
+        sprite.material.rotation = rot;
+        makeAddCommand('TEXT', sprite, t.layer).do();
+        ent = entities.get(sprite.userData.entityId);
+    }
+    if (!ent) return null;
+    const layer = layers.get(t.layer);
+    ent.object.visible = layer ? layer.visible : true;
+    t.promoted = true; t.entityId = ent.id;
+    impPromotedLabelCount++;
+    if (importedModel && importedModel.session) importedModel.session.promotedLabels.add(t.key);
+    return ent;
+}
+
+/** Click chuột: chữ (nếu trúng) ưu tiên, sau đó đường nét — trả về đối tượng tự vẽ tương ứng (hoặc null). */
+function impPickAndPromote(event) {
+    const t = impPickLabelAt(event.clientX, event.clientY);
+    if (t) return impPromoteLabel(t);
+    const it = impPickAt(event);
+    return it ? impPromote(it) : null;
 }

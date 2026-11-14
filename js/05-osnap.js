@@ -516,33 +516,40 @@
         }
 
         // --- Text (Sprite luôn quay mặt về camera, dùng canvas 2D để vẽ chữ rồi map làm texture) ---
-        function createTextSprite(text, worldPos, worldHeight) {
+        // Vẽ chữ (nhiều dòng, ngăn cách bằng '\n') lên canvas — dùng chung cho tạo mới và cập nhật nội dung
+        const TEXT_FONT_PX = 64, TEXT_PAD_PX = 12, TEXT_CAP_PX = 46; // CAP: chiều cao chữ hoa ước lượng (px) trên canvas
+        function drawTextCanvas(text) {
+            const lineH = Math.round(TEXT_FONT_PX * 1.25);
+            const lines = String(text).split('\n');
             const canvasEl = document.createElement('canvas');
             const ctx = canvasEl.getContext('2d');
-            const fontPx = 64;
-            ctx.font = `${fontPx}px Consolas, monospace`;
-            const metrics = ctx.measureText(text);
-            const padding = 12;
-            canvasEl.width = Math.max(1, Math.ceil(metrics.width) + padding * 2);
-            canvasEl.height = fontPx + padding * 2;
-            // Phải set lại font sau khi đổi kích thước canvas (canvas reset context khi resize)
-            ctx.font = `${fontPx}px Consolas, monospace`;
+            ctx.font = `${TEXT_FONT_PX}px Consolas, monospace`;
+            let w = 1;
+            lines.forEach(l => { w = Math.max(w, Math.ceil(ctx.measureText(l).width)); });
+            canvasEl.width = w + TEXT_PAD_PX * 2;
+            canvasEl.height = (lines.length - 1) * lineH + TEXT_FONT_PX + TEXT_PAD_PX * 2;
+            ctx.font = `${TEXT_FONT_PX}px Consolas, monospace`;
             ctx.fillStyle = '#7fffd4';
             ctx.textBaseline = 'top';
-            ctx.fillText(text, padding, padding);
+            lines.forEach((l, i) => ctx.fillText(l, TEXT_PAD_PX, TEXT_PAD_PX + i * lineH));
+            return canvasEl;
+        }
 
+        // worldHeight = chiều cao (đơn vị bản vẽ) của sprite MỘT dòng; chữ nhiều dòng cao hơn tương ứng
+        function createTextSprite(text, worldPos, worldHeight) {
+            const canvasEl = drawTextCanvas(text);
             const texture = new THREE.CanvasTexture(canvasEl);
             const material = new THREE.SpriteMaterial({ map: texture, color: currentDrawColor, transparent: true, depthTest: false });
             const sprite = new THREE.Sprite(material);
-
             if (worldHeight === undefined) {
                 const dist = camera.position.distanceTo(controls.target) || 1000;
                 worldHeight = dist * 0.03;
             }
-            const aspect = canvasEl.width / canvasEl.height;
-            sprite.scale.set(worldHeight * aspect, worldHeight, 1);
+            const per = worldHeight / (TEXT_FONT_PX + TEXT_PAD_PX * 2); // đơn vị bản vẽ trên mỗi px canvas
+            sprite.scale.set(canvasEl.width * per, canvasEl.height * per, 1);
             sprite.position.copy(worldPos);
             sprite.userData.text = text;
+            sprite.userData.worldPerPx = per;
             return sprite;
         }
 
