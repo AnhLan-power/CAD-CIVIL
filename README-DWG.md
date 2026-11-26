@@ -83,6 +83,25 @@ Lưu ý: file `.wasm` đi kèm được build trong môi trường thử nghiệ
 - Bảng **Properties** của TEXT có thêm Chiều cao chữ và Góc quay (gõ `\n` để xuống dòng).
 - Sau khi sửa cao độ, nếu đã tạo Surface thì tạo lại Surface để cập nhật.
 
+## Layer giống AutoCAD (`js/19-layer-model.js`)
+
+- Bảng **Layer Properties Manager** có đủ cột: S., Name, On, Freeze, Lock, Plot, Color, Linetype, Lineweight, Transparency,
+  Description; có ô Search, nút New Layer, chân bảng "All: N layers displayed of M total layers".
+- Khi nhập DXF/DWG, app đọc **toàn bộ bảng LAYER/LTYPE** (kể cả layer chưa dùng): màu ACI và màu RGB (true color), kiểu nét,
+  độ dày nét, trong suốt, cờ đóng băng/khoá/tắt/không in, mô tả; xref có layer dạng `TênXref|TênLớp`.
+- **Áp lên bản vẽ:** màu layer, màu riêng từng đối tượng (ByLayer / ByBlock / ACI / RGB), kiểu nét (DASHED, PHANTOM... theo định
+  nghĩa trong file × LTSCALE), độ trong suốt, bật/tắt/đóng băng. Chữ lấy màu layer. Có ô **LTSCALE** để chỉnh độ dài nét đứt.
+- Chỉnh trực tiếp trong bảng: đổi màu (bảng chọn màu), kiểu nét, độ dày, trong suốt, mô tả, đổi tên, xoá layer.
+  Layer đã chỉnh tay không bị ghi đè khi nạp thêm xref.
+- Độ dày nét (Lineweight) được lưu và hiển thị trong bảng nhưng không vẽ nét dày trong khung nhìn (giống AutoCAD khi tắt LWDISPLAY).
+- **Giới hạn của file DWG:** bộ đọc DWG không cung cấp độ trong suốt và mô tả layer (file DXF thì đọc đủ). Màu RGB của layer được
+  giữ nhờ bước hậu xử lý trong `dwg-bridge/src/lib.rs` (cần dùng bản `wasm/dwg_bridge.wasm` mới).
+
+## Bảng nổi (`js/20-floating-panels.js`)
+
+- Toolspace, Layer Properties Manager, Surfaces, Points, Assembly, Properties: **kéo bằng thanh tiêu đề**, **đổi kích thước bằng
+  góc dưới bên phải** (như bảng XR). Vị trí và kích thước được nhớ cho lần mở sau (xoá dữ liệu trình duyệt để về mặc định).
+
 ## Giấy phép
 
 Thư viện `acadrust` (https://github.com/hakanaktt/acadrust) dùng giấy phép **MPL-2.0**. File `.wasm` có chứa thư viện này;

@@ -217,3 +217,34 @@
 .xref-hint-tag { color: #888; font-size: 11px; }
 .xref-empty { padding: 16px; color: #888; }
 .xref-details { padding: 6px 10px; border-top: 1px solid #3c3c3c; background: #262626; color: #bbb; min-height: 46px; line-height: 1.5; }
+
+
+/* ===================== Bảng Layer Properties Manager (kiểu AutoCAD) ===================== */
+#layers-panel { width: 940px; height: 430px; min-width: 520px; min-height: 200px; }
+#layers-panel .panel-body { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.lyr-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #333; flex: none; }
+.lyr-toolbar button { background: #333; border: 1px solid #4a4a4a; color: #ddd; padding: 4px 10px; border-radius: 2px; cursor: pointer; font-size: 12px; }
+.lyr-toolbar button:hover { background: #3d3d3d; border-color: #0098ff; }
+.lyr-toolbar input[type=text] { background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 3px 6px; border-radius: 2px; font-size: 12px; width: 180px; outline: none; }
+.lyr-lts { margin-left: auto; color: #aaa; font-size: 11px; display: flex; align-items: center; gap: 4px; }
+.lyr-lts input { width: 70px; background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 2px 4px; border-radius: 2px; }
+.lyr-table-wrap { flex: 1; overflow: auto; }
+.lyr-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lyr-table th { position: sticky; top: 0; background: #2a2a2a; color: #aaa; font-weight: normal; text-align: left; padding: 5px 6px; border-bottom: 1px solid #3c3c3c; border-right: 1px solid #333; white-space: nowrap; z-index: 1; }
+.lyr-table td { padding: 2px 6px; border-bottom: 1px solid #2c2c2c; white-space: nowrap; }
+.lyr-table tr:hover td { background: #2b2f33; }
+.lyr-table tr.lyr-current td { background: #0b3a5e; }
+.lyr-c { text-align: center; cursor: pointer; user-select: none; }
+.lyr-dim { opacity: .3; }
+.lyr-check { color: #4ade80; font-weight: bold; }
+.lyr-name, .lyr-desc, .lyr-num, .lyr-table select { background: #262626; border: 1px solid #3a3a3a; color: #ddd; padding: 2px 4px; border-radius: 2px; font-size: 12px; outline: none; }
+.lyr-name { width: 150px; } .lyr-desc { width: 170px; } .lyr-num { width: 52px; } .lyr-table select { max-width: 130px; }
+.lyr-name:focus, .lyr-desc:focus, .lyr-num:focus { border-color: #0098ff; }
+.lyr-color label { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.lyr-color input[type=color] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.lyr-swatch { width: 14px; height: 14px; border: 1px solid #888; display: inline-block; }
+.lyr-footer { flex: none; padding: 5px 10px; border-top: 1px solid #3c3c3c; color: #999; font-size: 11px; }
+
+/* ===================== Bảng nổi: kéo bằng tiêu đề, đổi cỡ bằng góc dưới phải ===================== */
+.floating-panel { resize: both; overflow: hidden; min-width: 200px; min-height: 120px; }
+.floating-panel > .panel-header { cursor: move; user-select: none; }
