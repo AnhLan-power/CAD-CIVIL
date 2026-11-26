@@ -173,7 +173,8 @@
             const e = entities.get(id);
             if (e) {
                 const layer = layers.get(e.layerName);
-                setEntityColor(e.object, layer ? layer.color : DRAW_COLOR);
+                const base = e.object.userData.baseColor !== undefined ? e.object.userData.baseColor : (layer ? layer.color : DRAW_COLOR);
+                setEntityColor(e.object, base);
             }
         }
         function clearSelection() {

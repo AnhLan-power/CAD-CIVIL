@@ -308,6 +308,92 @@ const IMP_SUPPORTED_TYPES = new Set(['HATCH', 'LINE', 'LWPOLYLINE', 'POLYLINE', 
 // 4) Duỗi phẳng toàn bộ bản vẽ thành: items (hình học), labels (chữ), elevPts (điểm cao độ)
 // ------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------
+// 3a) Bảng LAYER / LTYPE / $LTSCALE: màu, kiểu nét, độ dày, trong suốt, cờ in/khoá/đóng băng, mô tả
+//     dxf-parser chỉ đọc tên + màu ACI + bật/tắt nên tự đọc thêm từ DXF thô.
+// ------------------------------------------------------------------------------------------
+function impPairs(body) {
+    const L = body.split(/\r?\n/), P = [];
+    for (let i = 0; i + 1 < L.length; i += 2) P.push([parseInt(L[i], 10), L[i + 1]]);
+    return P;
+}
+function impParseLayerTable(rawText) {
+    const out = new Map();
+    if (!rawText) return out;
+    const re = /\n\s*0\r?\nLAYER\r?\n([\s\S]*?)(?=\n\s*0\r?\n[A-Z])/g;
+    let m;
+    while ((m = re.exec(rawText)) !== null) {
+        const P = impPairs(m[1]);
+        const rec = { name: null, flags: 0, c62: undefined, c420: undefined, lt: '', plot: 1, lw: -3, c440: undefined, desc: '' };
+        let xdataApp = '', x1000 = [];
+        for (const [c, v] of P) {
+            if (c === 2 && rec.name === null) rec.name = v.trim();
+            else if (c === 70) rec.flags = parseInt(v, 10) || 0;
+            else if (c === 62) rec.c62 = parseInt(v, 10);
+            else if (c === 420) rec.c420 = parseInt(v, 10);
+            else if (c === 6) rec.lt = v.trim();
+            else if (c === 290) rec.plot = parseInt(v, 10);
+            else if (c === 370) rec.lw = parseInt(v, 10);
+            else if (c === 440) rec.c440 = parseInt(v, 10);
+            else if (c === 1001) xdataApp = v.trim();
+            else if (c === 1000 && xdataApp === 'AcAecLayerStandard') x1000.push(v);
+        }
+        if (x1000.length >= 2) rec.desc = x1000[1].trim();
+        if (rec.name !== null) out.set(rec.name, rec);
+    }
+    return out;
+}
+function impParseLinetypes(rawText) {
+    const out = new Map();
+    if (!rawText) return out;
+    const re = /\n\s*0\r?\nLTYPE\r?\n([\s\S]*?)(?=\n\s*0\r?\n[A-Z])/g;
+    let m;
+    while ((m = re.exec(rawText)) !== null) {
+        const P = impPairs(m[1]);
+        let name = null, desc = '';
+        const pattern = [];
+        for (const [c, v] of P) {
+            if (c === 2 && name === null) name = v.trim();
+            else if (c === 3 && !desc) desc = v.trim();
+            else if (c === 49) { const f = parseFloat(v); if (isFinite(f)) pattern.push(f); }
+        }
+        if (name !== null) out.set(name.toUpperCase(), { name, desc, pattern });
+    }
+    return out;
+}
+function impParseLtScale(rawText) {
+    const m = rawText && /\n\s*9\r?\n\$LTSCALE\r?\n\s*40\r?\n([^\r\n]+)/.exec(rawText);
+    const v = m ? parseFloat(m[1]) : NaN;
+    return v > 0 ? v : 1;
+}
+/** Thuộc tính layer của 1 file (bản vẽ chính hoặc xref): name đã gắn tiền tố "Xref|" nếu có. */
+function impLayerDefs(dxf, rawText, prefix) {
+    const rawDefs = impParseLayerTable(rawText);
+    const parserLayers = (dxf && dxf.tables && dxf.tables.layer && dxf.tables.layer.layers) || {};
+    const names = new Set([...rawDefs.keys(), ...Object.keys(parserLayers)]);
+    const defs = [];
+    names.forEach(name => {
+        const r = rawDefs.get(name), pl = parserLayers[name] || {};
+        let aci = r && r.c62 !== undefined ? Math.abs(r.c62) : (pl.colorIndex !== undefined ? Math.abs(pl.colorIndex) : 7);
+        if (aci === 0 || aci === 256) aci = 7;
+        let color = (typeof pl.color === 'number') ? pl.color : 0xffffff;
+        if (r && r.c420 !== undefined && !isNaN(r.c420) && r.c420 >= 0) { color = r.c420 & 0xffffff; aci = null; } // màu RGB (true color)
+        const off = r && r.c62 !== undefined ? r.c62 < 0 : (pl.visible === false);
+        let transparency = 0;
+        if (r && r.c440 !== undefined && !isNaN(r.c440) && (r.c440 >>> 24) === 2) transparency = Math.round((1 - (r.c440 & 0xff) / 255) * 100);
+        defs.push({
+            name: prefix + name, aci, color, on: !off,
+            frozen: r ? (r.flags & 1) !== 0 : !!pl.frozen,
+            locked: r ? (r.flags & 4) !== 0 : false,
+            linetype: (r && r.lt) ? r.lt : 'Continuous',
+            lineweight: r && !isNaN(r.lw) ? r.lw : -3,
+            plot: r ? r.plot !== 0 : true,
+            transparency, description: r ? r.desc : ''
+        });
+    });
+    return defs;
+}
+
+// ------------------------------------------------------------------------------------------
 // 3b) XREF (tham chiếu ngoài): sổ đăng ký trong phiên nhập bản vẽ (importSession)
 //     Khối có cờ 4 (xref) / 8 (overlay) hoặc có đường dẫn xref là tham chiếu ngoài. Hình học của xref KHÔNG
 //     nằm trong file chính — người dùng nạp file xref (DWG/DXF) qua bảng quản lý XR, nội dung được mở rộng
@@ -354,14 +440,22 @@ function impFlatten(dxf, rawText, session) {
     const MAX_ITEMS = 3000000;
     let instanceBudget = 400000; // tổng số lần mở rộng khối (chống nổ bộ nhớ khi khối lồng nhau)
 
+    // Màu riêng của đối tượng đang xử lý (null = theo layer). Được gán ở đầu mỗi vòng lặp trong walk().
+    let curColor = null;
+    const explicitColor = (e, parentColor) => {
+        const ci = e.colorIndex;
+        if (ci === 256) return null;                                  // ByLayer
+        if (ci === 0) return parentColor === undefined ? null : parentColor; // ByBlock: theo INSERT chứa nó
+        return (e.color !== undefined && e.color !== null) ? e.color : null; // ACI 1..255 hoặc true color
+    };
     const addItem = (kind, layer, handle, xy, closed) => {
         if (xy.length < 4 || items.length >= MAX_ITEMS) { if (items.length >= MAX_ITEMS) stats.budgetHit = true; return; }
-        items.push({ idx: items.length, kind, layer, handle, xy, closed: !!closed, segStart: 0, segCount: 0, promoted: false });
+        items.push({ idx: items.length, kind, layer, handle, xy, closed: !!closed, segStart: 0, segCount: 0, promoted: false, color: curColor });
     };
     const tx = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
     const txList = (m, pts) => { const o = new Array(pts.length); for (let i = 0; i < pts.length; i += 2) { o[i] = m[0] * pts[i] + m[2] * pts[i + 1] + m[4]; o[i + 1] = m[1] * pts[i] + m[3] * pts[i + 1] + m[5]; } return o; };
 
-    const addLabel = (e, m, layer, scope) => {
+    const addLabel = (e, m, layer, scope, parentColor) => {
         let textVal = e.text !== undefined ? e.text : (e.string !== undefined ? e.string : e.value);
         if (textVal === undefined || textVal === null || String(textVal).trim() === '') return;
         const isM = e.type === 'MTEXT';
@@ -394,7 +488,7 @@ function impFlatten(dxf, rawText, session) {
             fy = va === 3 ? 0 : (va === 2 ? -0.5 : (va === 1 ? -1 : -0.85));
         }
         const key = layer + '|' + clean + '|' + p[0].toFixed(3) + ',' + p[1].toFixed(3);
-        const lab = { text: clean, x: p[0], y: p[1], height: height * sc, rotation: (e.rotation || 0) + impRotOf(m), layer, fx, fy, key, isElev: false };
+        const lab = { text: clean, x: p[0], y: p[1], height: height * sc, rotation: (e.rotation || 0) + impRotOf(m), layer, fx, fy, key, isElev: false, color: explicitColor(e, parentColor) };
         if (/^-?\d+([.,]\d+)?$/.test(clean)) {
             const z = parseFloat(clean.replace(',', '.'));
             if (!isNaN(z)) { elevPts.push({ x: p[0], y: p[1], z, key }); lab.isElev = true; }
@@ -402,7 +496,7 @@ function impFlatten(dxf, rawText, session) {
         labels.push(lab);
     };
 
-    const expandBlock = (name, m, layer, depth, scope) => {
+    const expandBlock = (name, m, layer, depth, scope, pColor) => {
         const blk = scope.blocks[name];
         let rec = xrefs.get(name);
         if (!rec && impIsXrefBlock(blk)) rec = impEnsureXref(session, name, blk, scope.owner, false);
@@ -411,7 +505,7 @@ function impFlatten(dxf, rawText, session) {
             rec.instances++;
             if (!rec.loaded || depth > 8) return;
             if (--instanceBudget < 0) { stats.budgetHit = true; return; }
-            walk(rec.dxf.entities || [], m, null, depth + 1, scopeOfXref(rec));
+            walk(rec.dxf.entities || [], m, null, depth + 1, scopeOfXref(rec), pColor);
             return;
         }
         if (!blk || !blk.entities || blk.entities.length === 0) {
@@ -422,16 +516,17 @@ function impFlatten(dxf, rawText, session) {
         }
         if (depth > 8) return;
         if (--instanceBudget < 0) { stats.budgetHit = true; return; }
-        walk(blk.entities, m, layer, depth + 1, scope);
+        walk(blk.entities, m, layer, depth + 1, scope, pColor);
     };
 
-    const walk = (list, m, parentLayer, depth, scope) => {
+    const walk = (list, m, parentLayer, depth, scope, parentColor) => {
         for (let i = 0; i < list.length; i++) {
             const e = list[i];
             let layer = e.layer || '0';
             if (layer === '0' && parentLayer) layer = parentLayer; // ByBlock: lớp "0" trong khối lấy theo lớp của INSERT
             else if (scope.prefix) layer = scope.prefix + layer;    // lớp của xref: "TênXref|TênLớp"
             const h = e.handle !== undefined ? String(e.handle) : '';
+            curColor = explicitColor(e, parentColor);
             switch (e.type) {
                 case 'LINE':
                     if (e.vertices && e.vertices.length >= 2) {
@@ -516,10 +611,11 @@ function impFlatten(dxf, rawText, session) {
                 case 'TEXT':
                 case 'MTEXT':
                 case 'ATTRIB':
-                    addLabel(e, m, layer, scope);
+                    addLabel(e, m, layer, scope, parentColor);
                     break;
                 case 'INSERT': {
                     const base = scope.blocks[e.name] ? scope.blocks[e.name].position : null;
+                    const childColor = curColor === null ? parentColor : curColor; // INSERT có màu riêng -> đối tượng ByBlock trong khối theo màu đó
                     const cols = Math.max(1, e.columnCount || 1), rows = Math.max(1, e.rowCount || 1);
                     const cnt = Math.min(cols * rows, 10000);
                     for (let q = 0; q < cnt; q++) {
@@ -531,15 +627,15 @@ function impFlatten(dxf, rawText, session) {
                             const ox = (e.columnSpacing || 0) * ci, oy = (e.rowSpacing || 0) * ri;
                             mi = [mi[0], mi[1], mi[2], mi[3], mi[4] + ox * Math.cos(th) - oy * Math.sin(th), mi[5] + ox * Math.sin(th) + oy * Math.cos(th)];
                         }
-                        expandBlock(e.name, impMul(m, mi), layer, depth, scope);
+                        expandBlock(e.name, impMul(m, mi), layer, depth, scope, childColor);
                         // thuộc tính của khối (VD số hiệu/cao độ điểm khảo sát)
                         const atts = e.attributes || e.attribs;
-                        if (atts) atts.forEach(a => addLabel(a, m, layer, scope));
+                        if (atts) atts.forEach(a => addLabel(a, m, layer, scope, childColor));
                     }
                     break;
                 }
                 case 'DIMENSION':
-                    if (e.block) expandBlock(e.block, m, layer, depth, scope);
+                    if (e.block) expandBlock(e.block, m, layer, depth, scope, curColor === null ? parentColor : curColor);
                     break;
                 default:
                     break;
@@ -547,9 +643,9 @@ function impFlatten(dxf, rawText, session) {
         }
     };
 
-    walk(dxf.entities || [], IMP_IDENTITY, null, 0, mainScope);
+    walk(dxf.entities || [], IMP_IDENTITY, null, 0, mainScope, undefined);
     // Xref do người dùng tự đính kèm (lệnh Attach trong bảng XR): chèn tại điểm/tỉ lệ/góc đã chọn
-    session.extraInserts.forEach(ins => expandBlock(ins.name, impInsertMatrix(ins, null), null, 0, mainScope));
+    session.extraInserts.forEach(ins => expandBlock(ins.name, impInsertMatrix(ins, null), null, 0, mainScope, undefined));
     return { items, labels, elevPts, stats };
 }
 
@@ -644,6 +740,21 @@ function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
     labels = labels.filter(l => Math.hypot(l.x - rc.x, l.y - rc.y) <= R);
     elevPts = elevPts.filter(p => Math.hypot(p.x - rc.x, p.y - rc.y) <= R);
 
+    // Layer: nạp thuộc tính (màu, kiểu nét, độ dày, trong suốt, khoá/đóng băng, in, mô tả) từ bảng LAYER/LTYPE của
+    // bản vẽ chính và các xref đã nạp. Layer người dùng đã tự chỉnh (userEdited) được giữ nguyên.
+    if (!rerender) { impLinetypes = new Map(); impLtScale = impParseLtScale(rawText); }
+    impParseLinetypes(rawText).forEach((v, k) => impLinetypes.set(k, v));
+    xrefList.forEach(r => { if (r.loaded) impParseLinetypes(r.raw).forEach((v, k) => { if (!impLinetypes.has(k)) impLinetypes.set(k, v); }); });
+    const layerDefs = impLayerDefs(dxf, rawText, '');
+    xrefList.forEach(r => { if (r.loaded) layerDefs.push(...impLayerDefs(r.dxf, r.raw, r.name + '|')); });
+    layerDefs.forEach(d => {
+        let L = layers.get(d.name);
+        if (L && L.userEdited) return;
+        if (!L) L = layerCreate(d.name, {});
+        Object.assign(L, { color: d.color, aci: d.aci, on: d.on, frozen: d.frozen, locked: d.locked, linetype: d.linetype, lineweight: d.lineweight, plot: d.plot, transparency: d.transparency, description: d.description });
+        layerEnsure(L);
+    });
+
     // Toạ độ trong bộ đệm lưu theo gốc "origin" (gần tâm) để tránh mất độ chính xác float32 với toạ độ lớn
     const origin = session.origin || { x: Math.round(rc.x), y: Math.round(rc.y) };
     session.origin = origin;
@@ -653,7 +764,8 @@ function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
     let segTotal = 0;
     items.forEach(it => {
         let buf = layerBuffers.get(it.layer);
-        if (!buf) { buf = { pos: [], owner: [] }; layerBuffers.set(it.layer, buf); }
+        if (!buf) { buf = { pos: [], owner: [], hasColor: false }; layerBuffers.set(it.layer, buf); }
+        if (it.color != null) buf.hasColor = true;
         const n = it.xy.length / 2, segs = it.closed ? n : n - 1;
         it.segStart = buf.owner.length; it.segCount = segs;
         let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -678,14 +790,24 @@ function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
     const layerObjs = new Map();
     layerBuffers.forEach((buf, layerName) => {
         let layer = layers.get(layerName);
-        if (!layer) {
-            layer = { name: layerName, color: 0x00e5ff, visible: true, locked: false, importObject3D: null };
-            layers.set(layerName, layer);
-        }
+        if (!layer) layer = layerCreate(layerName, {}); // layer có đối tượng nhưng không có trong bảng LAYER -> mặc định trắng
+        layerEnsure(layer);
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
         geo.userData.owner = Int32Array.from(buf.owner);
-        const ls = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: layer.color }));
+        if (buf.hasColor) { // có đối tượng mang màu riêng -> lưu màu từng đỉnh (đối tượng ByLayer lấy màu layer)
+            const col = new Float32Array(buf.owner.length * 6), lc = new THREE.Color(layer.color), tmp = new THREE.Color();
+            for (let s2 = 0; s2 < buf.owner.length; s2++) {
+                const it2 = items[buf.owner[s2]];
+                const c = it2.color != null ? tmp.set(it2.color) : lc;
+                const bb = s2 * 6;
+                col[bb] = c.r; col[bb + 1] = c.g; col[bb + 2] = c.b; col[bb + 3] = c.r; col[bb + 4] = c.g; col[bb + 5] = c.b;
+            }
+            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        }
+        const ls = new THREE.LineSegments(geo, makeLayerMaterial(layer, buf.hasColor));
+        ls.userData.hasColors = buf.hasColor;
+        if (getLinetypePattern(layer.linetype)) ls.computeLineDistances();
         ls.visible = layer.visible;
         layer.importObject3D = ls;
         group.add(ls);
@@ -713,6 +835,9 @@ function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
         div.textContent = l.text;
         if (l.text.indexOf('\n') !== -1) { div.style.whiteSpace = 'pre'; div.style.lineHeight = '1.15'; }
         div.style.display = 'none';
+        const lyr = layers.get(l.layer);
+        const tcol = l.color != null ? l.color : (lyr ? lyr.color : null);
+        if (tcol != null) div.style.color = layerHex(tcol);
         textOverlay.appendChild(div);
         textElements.push({ element: div, position: new THREE.Vector3(l.x - off.x, l.y - off.y, 0), height: l.height, rotation: l.rotation, fx: l.fx, fy: l.fy, layer: l.layer, text: l.text, key: l.key, isElev: l.isElev, elevRef: null, promoted: false });
     });
@@ -755,6 +880,7 @@ function renderOptimized2D(dxf, filename, rawText, extraNote, opts) {
 // 7) Chữ: cỡ chữ theo chiều cao thật (to/nhỏ theo zoom như AutoCAD), tự ẩn khi quá nhỏ
 // ------------------------------------------------------------------------------------------
 function updateTextPositions() {
+    layerUpdateDashPixel();
     const n = textElements.length;
     if (!n) return;
     const W = window.innerWidth, H = window.innerHeight;
@@ -855,7 +981,13 @@ function impPromote(item) {
     for (let i = 0; i < item.xy.length; i += 2) pts.push(new THREE.Vector3(item.xy[i] - o.x + gp.x, item.xy[i + 1] - o.y + gp.y, 0));
     const layer = layers.get(item.layer);
     const obj = buildLineObject(pts, item.closed);
-    setEntityColor(obj, layer ? layer.color : 0x00e5ff);
+    if (layer) {
+        obj.material.dispose();
+        obj.material = makeLayerMaterial(layer, false);
+        if (getLinetypePattern(layer.linetype)) obj.computeLineDistances();
+    }
+    if (item.color != null) obj.userData.baseColor = item.color; // màu riêng của đối tượng (không theo layer)
+    setEntityColor(obj, item.color != null ? item.color : (layer ? layer.color : 0xffffff));
     const type = item.kind === 'LINE' ? 'LINE' : (item.kind === 'CIRCLE' ? 'CIRCLE' : 'POLYLINE');
     makeAddCommand(type, obj, item.layer).do(); // không đưa vào lịch sử Undo: chỉ là đổi dạng đối tượng
     const ent = entities.get(obj.userData.entityId);
