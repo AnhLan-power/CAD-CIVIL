@@ -51,6 +51,7 @@
         <div class="ribbon-tabs">
             <button class="tab-btn active" data-tab="home" onclick="switchTab('home')">Home</button>
             <button class="tab-btn" data-tab="insert" onclick="switchTab('insert')">Insert</button>
+            <button class="tab-btn" data-tab="pipes" onclick="switchTab('pipes')">Cấp thoát nước</button>
             <button class="tab-btn" data-tab="annotate" onclick="switchTab('annotate')">Annotate</button>
             <button class="tab-btn" data-tab="modify" onclick="switchTab('modify')">Modify</button>
             <button class="tab-btn" data-tab="analyze" onclick="switchTab('analyze')">Analyze</button>
@@ -196,6 +197,30 @@
                     <button class="tool-btn" id="tool-xref" onclick="runXrefCommand()" title="Quản lý tham chiếu ngoài (lệnh XR)"><span class="ic">🔗</span>External<br>References</button>
                 </div>
                 <div class="group-title">Reference</div>
+            </div>
+        </div>
+
+        <div class="ribbon-content ribbon-panel" id="ribbon-panel-pipes" style="display: none;">
+            <div class="ribbon-group">
+                <div class="group-tools">
+                    <button class="tool-btn tool-target" id="tool-net-drain" onclick="setTool('net-drain')" title="Vẽ tuyến cống + hố ga"><span class="ic">🕳</span>Tuyến<br>thoát nước</button>
+                    <button class="tool-btn tool-target" id="tool-net-mh" onclick="setTool('net-mh')" title="Thêm hố ga lên đoạn cống"><span class="ic">⬚</span>Thêm<br>hố ga</button>
+                </div>
+                <div class="group-title">Thoát nước</div>
+            </div>
+            <div class="ribbon-group">
+                <div class="group-tools">
+                    <button class="tool-btn tool-target" id="tool-net-water" onclick="setTool('net-water')" title="Vẽ tuyến ống cấp nước"><span class="ic">🚰</span>Tuyến<br>cấp nước</button>
+                    <div class="group-col"><button class="row-btn tool-target" id="tool-net-fit-valve" onclick="setTool('net-fit-valve')" title="Đặt Van lên tuyến ống"><span class="ic">⋈</span>Van</button><button class="row-btn tool-target" id="tool-net-fit-tee" onclick="setTool('net-fit-tee')" title="Đặt Tê lên tuyến ống"><span class="ic">⊥</span>Tê</button><button class="row-btn tool-target" id="tool-net-fit-elbow" onclick="setTool('net-fit-elbow')" title="Đặt Co lên tuyến ống"><span class="ic">⌐</span>Co</button></div><div class="group-col"><button class="row-btn tool-target" id="tool-net-fit-hydrant" onclick="setTool('net-fit-hydrant')" title="Đặt TNCC lên tuyến ống"><span class="ic">⊕</span>TNCC</button><button class="row-btn tool-target" id="tool-net-fit-meter" onclick="setTool('net-fit-meter')" title="Đặt Đồng hồ lên tuyến ống"><span class="ic">▣</span>Đồng hồ</button><button class="row-btn tool-target" id="tool-net-fit-cap" onclick="setTool('net-fit-cap')" title="Đặt Bịt lên tuyến ống"><span class="ic">┤</span>Bịt</button></div><div class="group-col"><button class="row-btn tool-target" id="tool-net-fit-reducer" onclick="setTool('net-fit-reducer')" title="Đặt Côn thu lên tuyến ống"><span class="ic">◁</span>Côn thu</button><button class="row-btn tool-target" id="tool-net-fit-wash" onclick="setTool('net-fit-wash')" title="Đặt Xả cặn lên tuyến ống"><span class="ic">◉</span>Xả cặn</button><button class="row-btn tool-target" id="tool-net-fit-air" onclick="setTool('net-fit-air')" title="Đặt Xả khí lên tuyến ống"><span class="ic">○</span>Xả khí</button></div>
+                </div>
+                <div class="group-title">Cấp nước — phụ kiện</div>
+            </div>
+            <div class="ribbon-group" style="border-right: none;">
+                <div class="group-tools">
+                    <button class="tool-btn" onclick="pnOpenManager(pnMgrNet || pipeNets[0])" title="Bảng quản lý số liệu mạng lưới"><span class="ic">📋</span>Bảng<br>quản lý</button>
+                    <button class="tool-btn" onclick="pnOpenProfile(pnMgrNet || pipeNets[0])" title="Trắc dọc có bảng số liệu"><span class="ic">📈</span>Trắc dọc<br>tuyến</button>
+                </div>
+                <div class="group-title">Quản lý</div>
             </div>
         </div>
 
@@ -473,5 +498,8 @@
     <script src="js/18-text-edit.js"></script>
     <script src="js/19-layer-model.js"></script>
     <script src="js/20-floating-panels.js"></script>
+    <script src="js/21-pipe-network.js"></script>
+    <script src="js/22-pipe-tools.js"></script>
+    <script src="js/23-pipe-profile.js"></script>
 </body>
 </html>

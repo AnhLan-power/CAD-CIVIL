@@ -102,6 +102,31 @@ Lưu ý: file `.wasm` đi kèm được build trong môi trường thử nghiệ
 - Toolspace, Layer Properties Manager, Surfaces, Points, Assembly, Properties: **kéo bằng thanh tiêu đề**, **đổi kích thước bằng
   góc dưới bên phải** (như bảng XR). Vị trí và kích thước được nhớ cho lần mở sau (xoá dữ liệu trình duyệt để về mặc định).
 
+## Cấp thoát nước kiểu Việt Nam (`js/21-pipe-network.js`, `22-pipe-tools.js`, `23-pipe-profile.js`)
+
+Tab **Cấp thoát nước** trên ribbon.
+
+**Thoát nước (cống + hố ga)**
+- *Tuyến thoát nước*: hộp thiết lập (tên tuyến, tiền tố hố ga `GT1.`, DN, độ dốc i%, độ phủ tối thiểu, cao độ đáy cống đầu tuyến — để trống thì tự tính theo độ phủ, độ sụt tại hố ga, nền hoàn thiện − tự nhiên) rồi click từng hố ga theo chiều dòng chảy.
+  Enter / chuột phải / double-click: kết thúc; Backspace: bỏ điểm cuối. *Thêm hố ga*: click lên đoạn cống.
+- Mỗi hố ga có: cao độ tự nhiên, nền hoàn thiện (= đỉnh ga), đáy ga, chiều cao ga, góc quay mặt bằng. Mỗi cống: DN, i%, L, đáy/đỉnh cống hai đầu
+  (đỉnh = đáy + DN), độ phủ nhỏ nhất (cảnh báo nếu nhỏ hơn quy định). Đáy cống giảm theo L×i dọc tuyến, nối tiếp qua hố ga.
+- Mặt bằng: ô vuông ký hiệu hố ga, chú thích tròn (tên) kèm cao độ đỉnh (đỏ) / đáy (xanh), nhãn cống `DN225-L=19.3M` và mũi tên dòng chảy.
+
+**Cấp nước (ống + phụ kiện)**
+- *Tuyến cấp nước*: DN, vật liệu, chiều sâu chôn ống; click các điểm gãy. Phụ kiện (Van, Tê, Co, TNCC, Đồng hồ, Bịt, Côn thu, Xả cặn, Xả khí):
+  chọn nút rồi click lên tuyến ống — tự chèn điểm và chia đoạn, có chú thích dẫn tên (VD `VAN QUẢN LÝ DN50`, sửa được).
+- Cao độ đáy ống = cao độ via hè − chiều sâu chôn; dốc dọc, khoảng cách lẻ/cộng dồn, góc quay mặt bằng tính tự động.
+
+**Chung**
+- Cao độ mặt đất lấy tự động từ **Surface (TIN)** đang có; chưa có thì nhập tay trong bảng quản lý (điểm chưa có số liệu được nội suy theo cọc).
+- **Bảng quản lý**: chọn tuyến, sửa tên/thông số, từng hố ga/điểm (tên, cao độ, độ sụt, sâu chôn, phụ kiện, nhãn), từng đoạn (DN, i%, vật liệu); phóng tới điểm, xoá điểm/tuyến;
+  click hố ga/cống/ống bằng công cụ Select sẽ chọn đúng dòng. **Lưu/Mở .json** để giữ mạng lưới (app chưa có chức năng lưu bản vẽ).
+- **Trắc dọc (SVG)**: thoát nước 10 hàng (nền hoàn thiện, tự nhiên, đỉnh/đáy ga, đỉnh/đáy cống, chiều cao ga, L–DN–i, góc quay, tên hố ga);
+  cấp nước 9 hàng (via hè, đáy ống, chiều sâu chôn, dốc dọc ô chéo, đường kính, khoảng cách lẻ/cộng dồn, tên cọc, góc quay).
+  Chỉnh tỉ lệ X/Y, phóng to, nền trắng để in, xuất **SVG / PNG**.
+- Giới hạn hiện tại: mỗi tuyến là 1 đường (chưa phân nhánh); chưa tính thuỷ lực (lưu lượng, vận tốc); chưa xuất trắc dọc ra DXF/DWG.
+
 ## Giấy phép
 
 Thư viện `acadrust` (https://github.com/hakanaktt/acadrust) dùng giấy phép **MPL-2.0**. File `.wasm` có chứa thư viện này;
