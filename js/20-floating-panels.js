@@ -19,10 +19,15 @@
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
     }
+    // Mép dưới của thanh ribbon: bảng không được kéo lên dưới ribbon (sẽ không nắm lại được tiêu đề)
+    function ribbonBottom() {
+        const vis = Array.from(document.querySelectorAll('.ribbon-content')).find(e => e.offsetParent !== null);
+        return vis ? Math.round(vis.getBoundingClientRect().bottom) + 2 : 108;
+    }
     function clampIntoView(panel) {
         const r = panel.getBoundingClientRect();
         const maxL = Math.max(0, window.innerWidth - 60), maxT = Math.max(0, window.innerHeight - 40);
-        const left = Math.min(Math.max(-r.width + 80, r.left), maxL), top = Math.min(Math.max(0, r.top), maxT);
+        const left = Math.min(Math.max(-r.width + 80, r.left), maxL), top = Math.min(Math.max(ribbonBottom(), r.top), maxT);
         panel.style.left = left + 'px';
         panel.style.top = top + 'px';
         // Bảng cao hơn khoảng còn lại bên dưới (VD kéo Toolspace xuống) -> co chiều cao để góc đổi cỡ luôn nằm trong màn hình
@@ -41,7 +46,7 @@
             if (geom.height) panel.style.height = geom.height + 'px';
             panel.dataset.moved = '1';
         }
-        const bringToFront = () => { panel.style.zIndex = String(Math.min(++zTop, 24)); };
+        const bringToFront = () => { panel.style.zIndex = String(Math.min(++zTop, 29)); };
         const remember = () => {
             const r = panel.getBoundingClientRect();
             if (r.width < 20) return; // đang ẩn
@@ -61,7 +66,7 @@
         header.addEventListener('pointermove', e => {
             if (!drag) return;
             panel.style.left = (e.clientX - drag.dx) + 'px';
-            panel.style.top = Math.max(0, e.clientY - drag.dy) + 'px';
+            panel.style.top = Math.max(ribbonBottom(), e.clientY - drag.dy) + 'px';
         });
         const end = () => { if (drag) { drag = null; clampIntoView(panel); remember(); } };
         header.addEventListener('pointerup', end);
@@ -73,6 +78,8 @@
             new ResizeObserver(() => { if (first) { first = false; return; } if (panel.dataset.moved) remember(); }).observe(panel);
         }
     }
+    window.cadBringToFront = el => { el.style.zIndex = String(Math.min(++zTop, 29)); }; // đưa bảng lên trên cùng
+    window.cadMakeFloating = makeFloating; // dùng cho các bảng tạo động (XR, mạng lưới cấp thoát nước, trắc dọc)
     function init() { IDS.forEach(id => { const el = document.getElementById(id); if (el) makeFloating(el); }); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
     window.addEventListener('resize', () => IDS.forEach(id => { const el = document.getElementById(id); if (el && el.dataset.moved) clampIntoView(el); }));

@@ -769,6 +769,7 @@
                         setCommandText(`Command: Đã chọn ${ent.type} (lớp ${ent.layerName}, ID ${ent.id}) từ bản vẽ nhập.`);
                         return;
                     }
+                    if (typeof pnSelectAt === 'function' && pnSelectAt(event)) return; // hố ga / cống / ống / phụ kiện
                     clearSelection();
                     return;
                 }
